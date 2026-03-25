@@ -20,13 +20,17 @@ const DIFF_MODE_LABELS = {
 };
 
 const DEFAULT_LOG_MESSAGE = "Edit the rendered VDOM preview to inspect diff, then click Patch to apply it.";
-const DEFAULT_EDITOR_HELP = "Edit the rendered preview directly. Existing keys stay in the virtual tree.";
+const DEFAULT_EDITOR_HELP = "Edit the rendered preview directly. Use the block tools to add keys, props, and list items.";
 const DIFF_TYPE_PRIORITY = ["REMOVE", "CREATE", "REPLACE", "REORDER", "PROPS", "TEXT"];
+const EDITABLE_BLOCK_SELECTOR = "p, li, h1, h2, h3, h4, h5, h6, blockquote, article, section, div";
+const PREVIEW_SYNC_MESSAGE = "The current actual and test VDOM match in this mode.";
 
 const elements = {
   actualRoot: document.querySelector("#actual-root"),
   testRoot: document.querySelector("#test-root"),
   editorStatus: document.querySelector("#editor-status"),
+  editorSelection: document.querySelector("#editor-selection"),
+  editorTools: Array.from(document.querySelectorAll("[data-editor-action]")),
   patchButton: document.querySelector("#patch-button"),
   undoButton: document.querySelector("#undo-button"),
   redoButton: document.querySelector("#redo-button"),
@@ -54,6 +58,10 @@ const state = {
   statusMessage: "Initial Virtual DOM is ready.",
   highlightTimer: null,
   keyReport: null,
+  previewObserver: null,
+  syncFrame: null,
+  pendingSyncMessage: PREVIEW_SYNC_MESSAGE,
+  autoKeyCounter: 0,
 };
 
 bootstrap();
@@ -77,6 +85,7 @@ function bootstrap() {
   renderVdomTrees();
   updatePreviewAnalysis(DEFAULT_LOG_MESSAGE);
   renderEditorStatus();
+  updateSelectedBlockUI();
 }
 
 function bindEvents() {
@@ -84,22 +93,100 @@ function bindEvents() {
   elements.undoButton.addEventListener("click", handleUndo);
   elements.redoButton.addEventListener("click", handleRedo);
   elements.testRoot.addEventListener("input", handleEditorInput);
+  elements.testRoot.addEventListener("click", handleEditorSelectionChange);
+  elements.testRoot.addEventListener("keyup", handleEditorSelectionChange);
+  document.addEventListener("selectionchange", handleEditorSelectionChange);
 
   elements.diffModeButtons.forEach((button) => {
     button.addEventListener("click", handleDiffModeChange);
   });
+
+  elements.editorTools.forEach((button) => {
+    button.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+    });
+    button.addEventListener("click", handleEditorToolAction);
+  });
+
+  startPreviewObserver();
 }
 
 function handleEditorInput() {
-  const nextVdom = readEditorVdom();
+  queuePreviewSync(PREVIEW_SYNC_MESSAGE);
+}
 
-  state.previewVdom = cloneVdom(nextVdom);
-  renderVdomTrees();
-  updatePreviewAnalysis("The current actual and test VDOM match in this mode.");
-  renderEditorStatus();
+function handleEditorSelectionChange() {
+  updateSelectedBlockUI();
+}
+
+function handleEditorToolAction(event) {
+  const action = event.currentTarget.dataset.editorAction;
+
+  if (!action) {
+    return;
+  }
+
+  runEditorTool(action);
+}
+
+function startPreviewObserver() {
+  state.previewObserver = new MutationObserver(() => {
+    ensureEditorHasContent();
+    queuePreviewSync(PREVIEW_SYNC_MESSAGE);
+  });
+
+  observePreviewRoot();
+}
+
+function observePreviewRoot() {
+  state.previewObserver?.observe(elements.testRoot, {
+    characterData: true,
+    childList: true,
+    subtree: true,
+  });
+}
+
+function withPreviewObserverPaused(task) {
+  if (!state.previewObserver) {
+    task();
+    return;
+  }
+
+  state.previewObserver.disconnect();
+
+  try {
+    task();
+  } finally {
+    observePreviewRoot();
+  }
+}
+
+function queuePreviewSync(message = PREVIEW_SYNC_MESSAGE) {
+  state.pendingSyncMessage = message;
+
+  if (state.syncFrame) {
+    return;
+  }
+
+  state.syncFrame = window.requestAnimationFrame(() => {
+    state.syncFrame = null;
+
+    const nextVdom = readEditorVdom();
+
+    state.previewVdom = cloneVdom(nextVdom);
+    renderVdomTrees();
+    updatePreviewAnalysis(state.pendingSyncMessage);
+    renderEditorStatus();
+    updateSelectedBlockUI();
+  });
 }
 
 function handlePatch() {
+  if (state.syncFrame) {
+    window.cancelAnimationFrame(state.syncFrame);
+    state.syncFrame = null;
+  }
+
   const nextVdom = readEditorVdom();
   const patches = diff(state.actualVdom, nextVdom, { mode: state.diffMode });
 
@@ -128,8 +215,10 @@ function handlePatch() {
 
   syncEditor(nextVdom);
   renderVdomTrees();
+  renderPreviewDecorations();
   renderActualDecorations(patches, state.keyReport);
   renderEditorStatus();
+  updateSelectedBlockUI();
   renderToolbarMeta();
 }
 
@@ -183,6 +272,7 @@ function applyHistorySnapshot(message) {
   renderVdomTrees();
   updatePreviewAnalysis(`${message} Actual and test VDOM are synced again.`);
   renderEditorStatus();
+  updateSelectedBlockUI();
 }
 
 function pushHistory(vdom) {
@@ -204,10 +294,14 @@ function updatePreviewAnalysis(emptyMessage = DEFAULT_LOG_MESSAGE) {
 }
 
 function syncEditor(vdom) {
-  mountVdom(elements.testRoot, vdom);
+  withPreviewObserverPaused(() => {
+    mountVdom(elements.testRoot, vdom);
+    ensureEditorHasContent();
+  });
 }
 
 function readEditorVdom() {
+  stripEditorArtifacts(elements.testRoot);
   clearSurfaceAnnotations(elements.testRoot);
   return domChildrenToVdom(elements.testRoot);
 }
@@ -250,6 +344,297 @@ function renderToolbarMeta() {
   elements.patchButton.disabled = false;
   elements.undoButton.disabled = state.index === 0;
   elements.redoButton.disabled = state.index === total - 1;
+}
+
+function runEditorTool(action) {
+  const activeBlock = getSelectedEditableBlock() || ensureEditorHasContent();
+  let focusTarget = activeBlock;
+
+  switch (action) {
+    case "insert-paragraph":
+      focusTarget = insertBlockAfter(activeBlock, createBlockElement("p", "New paragraph"));
+      state.statusMessage = "Inserted a new paragraph block.";
+      break;
+    case "insert-heading":
+      focusTarget = insertBlockAfter(activeBlock, createBlockElement("h3", "New heading"));
+      state.statusMessage = "Inserted a new heading block.";
+      break;
+    case "insert-list":
+      focusTarget = insertListItem(activeBlock, false);
+      state.statusMessage = "Inserted a new list item block.";
+      break;
+    case "insert-keyed-item":
+      focusTarget = insertListItem(activeBlock, true);
+      state.statusMessage = "Inserted a new keyed list item.";
+      break;
+    case "assign-key":
+      focusTarget = assignKeyToBlock(activeBlock);
+      break;
+    case "toggle-prop":
+      focusTarget = toggleBlockProp(activeBlock);
+      break;
+    case "duplicate-block":
+      focusTarget = duplicateBlock(activeBlock);
+      state.statusMessage = "Duplicated the selected block.";
+      break;
+    case "delete-block":
+      focusTarget = deleteBlock(activeBlock);
+      state.statusMessage = "Deleted the selected block.";
+      break;
+    default:
+      return;
+  }
+
+  ensureEditorHasContent();
+  updateSelectedBlockUI(focusTarget);
+  focusBlock(focusTarget);
+  queuePreviewSync("Editor tools updated the preview VDOM.");
+  renderToolbarMeta();
+}
+
+function ensureEditorHasContent() {
+  const firstBlock = elements.testRoot.firstElementChild;
+
+  if (firstBlock) {
+    return firstBlock;
+  }
+
+  const paragraph = createBlockElement("p", "Start typing here.");
+  elements.testRoot.appendChild(paragraph);
+  return paragraph;
+}
+
+function getSelectedEditableBlock() {
+  const selection = window.getSelection();
+
+  if (!selection || selection.rangeCount === 0) {
+    return null;
+  }
+
+  return getEditableBlockFromNode(selection.anchorNode);
+}
+
+function getEditableBlockFromNode(node) {
+  const element = node?.nodeType === Node.TEXT_NODE ? node.parentElement : node;
+
+  if (!element || !elements.testRoot.contains(element)) {
+    return null;
+  }
+
+  const block = element.closest(EDITABLE_BLOCK_SELECTOR);
+
+  if (!block || block === elements.testRoot || !elements.testRoot.contains(block)) {
+    return null;
+  }
+
+  return block;
+}
+
+function updateSelectedBlockUI(forcedBlock = null) {
+  stripEditorArtifacts(elements.testRoot);
+
+  const activeBlock = forcedBlock || getSelectedEditableBlock();
+
+  if (!activeBlock || !elements.testRoot.contains(activeBlock)) {
+    if (elements.editorSelection) {
+      elements.editorSelection.textContent = "Selected: none";
+    }
+    return;
+  }
+
+  activeBlock.dataset.editorSelected = "true";
+
+  if (!elements.editorSelection) {
+    return;
+  }
+
+  const tagName = activeBlock.tagName.toLowerCase();
+  const key = activeBlock.getAttribute("data-key");
+  const tone = activeBlock.getAttribute("data-tone");
+  const parts = [`Selected: <${tagName}>`];
+
+  if (key) {
+    parts.push(`key ${key}`);
+  }
+
+  if (tone) {
+    parts.push(`prop ${tone}`);
+  }
+
+  elements.editorSelection.textContent = parts.join(" | ");
+}
+
+function stripEditorArtifacts(rootElement) {
+  rootElement.querySelectorAll("[data-editor-selected]").forEach((element) => {
+    element.removeAttribute("data-editor-selected");
+  });
+}
+
+function createBlockElement(tagName, textContent) {
+  const element = document.createElement(tagName);
+  element.textContent = textContent;
+  return element;
+}
+
+function insertBlockAfter(referenceBlock, newBlock) {
+  if (!referenceBlock || !referenceBlock.parentNode) {
+    elements.testRoot.appendChild(newBlock);
+    return newBlock;
+  }
+
+  referenceBlock.parentNode.insertBefore(newBlock, referenceBlock.nextSibling);
+  return newBlock;
+}
+
+function insertListItem(referenceBlock, keyed) {
+  const currentItem = referenceBlock?.closest("li");
+  const currentList = currentItem?.parentElement?.matches("ul, ol") ? currentItem.parentElement : null;
+  const listItem = createBlockElement("li", keyed ? "New keyed item" : "New list item");
+
+  if (keyed) {
+    listItem.setAttribute("data-key", generateAutoKey("item"));
+  }
+
+  if (currentItem && currentList) {
+    currentList.insertBefore(listItem, currentItem.nextSibling);
+    return listItem;
+  }
+
+  const list = document.createElement("ul");
+  list.appendChild(listItem);
+  insertBlockAfter(referenceBlock, list);
+  return listItem;
+}
+
+function assignKeyToBlock(block) {
+  if (!block) {
+    return ensureEditorHasContent();
+  }
+
+  if (block.hasAttribute("data-key")) {
+    state.statusMessage = `Selected block already has key ${block.getAttribute("data-key")}.`;
+    return block;
+  }
+
+  const nextKey = generateAutoKey(block.tagName.toLowerCase());
+  block.setAttribute("data-key", nextKey);
+  state.statusMessage = `Assigned key ${nextKey} to the selected block.`;
+  return block;
+}
+
+function toggleBlockProp(block) {
+  if (!block) {
+    return ensureEditorHasContent();
+  }
+
+  const nextTone = block.getAttribute("data-tone") === "accent" ? null : "accent";
+
+  if (nextTone === null) {
+    block.removeAttribute("data-tone");
+    state.statusMessage = "Removed the accent prop from the selected block.";
+    return block;
+  }
+
+  block.setAttribute("data-tone", nextTone);
+  state.statusMessage = "Applied an accent prop to the selected block.";
+  return block;
+}
+
+function duplicateBlock(block) {
+  if (!block) {
+    return ensureEditorHasContent();
+  }
+
+  const clone = block.cloneNode(true);
+  refreshKeysInSubtree(clone);
+  return insertBlockAfter(block, clone);
+}
+
+function deleteBlock(block) {
+  if (!block || !block.parentNode) {
+    return ensureEditorHasContent();
+  }
+
+  const fallback = getNextEditableSibling(block) || getPreviousEditableSibling(block);
+  const listParent = block.parentElement?.matches("ul, ol") ? block.parentElement : null;
+
+  block.remove();
+
+  if (listParent && listParent.children.length === 0) {
+    const listFallback = getNextEditableSibling(listParent) || getPreviousEditableSibling(listParent);
+    listParent.remove();
+    return listFallback || ensureEditorHasContent();
+  }
+
+  return fallback || ensureEditorHasContent();
+}
+
+function getNextEditableSibling(element) {
+  let current = element?.nextElementSibling ?? null;
+
+  while (current) {
+    if (current.matches(EDITABLE_BLOCK_SELECTOR) || current.matches("ul, ol")) {
+      return current.matches("ul, ol") ? current.firstElementChild : current;
+    }
+
+    current = current.nextElementSibling;
+  }
+
+  return null;
+}
+
+function getPreviousEditableSibling(element) {
+  let current = element?.previousElementSibling ?? null;
+
+  while (current) {
+    if (current.matches(EDITABLE_BLOCK_SELECTOR) || current.matches("ul, ol")) {
+      return current.matches("ul, ol") ? current.lastElementChild : current;
+    }
+
+    current = current.previousElementSibling;
+  }
+
+  return null;
+}
+
+function refreshKeysInSubtree(rootNode) {
+  if (rootNode.nodeType !== Node.ELEMENT_NODE) {
+    return;
+  }
+
+  if (rootNode.hasAttribute("data-key")) {
+    rootNode.setAttribute("data-key", generateAutoKey(rootNode.tagName.toLowerCase()));
+  }
+
+  rootNode.querySelectorAll("[data-key]").forEach((element) => {
+    element.setAttribute("data-key", generateAutoKey(element.tagName.toLowerCase()));
+  });
+}
+
+function generateAutoKey(prefix = "node") {
+  state.autoKeyCounter += 1;
+  return `${prefix}-${state.autoKeyCounter}`;
+}
+
+function focusBlock(block) {
+  if (!block || !block.isConnected) {
+    elements.testRoot.focus();
+    return;
+  }
+
+  const target = block.matches("ul, ol") ? block.firstElementChild || block : block;
+  const selection = window.getSelection();
+  const range = document.createRange();
+
+  if (!target.firstChild) {
+    target.appendChild(document.createTextNode(""));
+  }
+
+  range.selectNodeContents(target);
+  range.collapse(false);
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+  elements.testRoot.focus();
 }
 
 function renderModeButtons() {

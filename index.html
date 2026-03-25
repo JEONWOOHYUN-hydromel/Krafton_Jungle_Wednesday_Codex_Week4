@@ -116,8 +116,24 @@
             Edit the rendered preview directly. Existing keys stay in the virtual tree.
           </p>
 
+          <div class="editor-tools" aria-label="Rendered editor tools">
+            <div class="editor-tools__group">
+              <button class="editor-tool" data-editor-action="insert-paragraph" type="button">+ Text</button>
+              <button class="editor-tool" data-editor-action="insert-heading" type="button">+ Heading</button>
+              <button class="editor-tool" data-editor-action="insert-list" type="button">+ Bullet</button>
+              <button class="editor-tool" data-editor-action="insert-keyed-item" type="button">+ Keyed Item</button>
+            </div>
+            <div class="editor-tools__group">
+              <button class="editor-tool" data-editor-action="assign-key" type="button">Key</button>
+              <button class="editor-tool" data-editor-action="toggle-prop" type="button">Prop</button>
+              <button class="editor-tool" data-editor-action="duplicate-block" type="button">Duplicate</button>
+              <button class="editor-tool" data-editor-action="delete-block" type="button">Delete</button>
+            </div>
+            <span id="editor-selection" class="status-chip status-chip--soft">Selected: none</span>
+          </div>
+
           <p class="canvas__hint">
-            Tip: change text directly, use Enter or Backspace to change structure,
+            Tip: select a block, use the mini toolbar like a Notion block editor,
             then compare Auto vs <code>Index Only</code>.
           </p>
           <div
