@@ -1,13 +1,13 @@
 import { DIFF_MODES, diff } from "./diff/diff.js";
 import { applyPatches } from "./patch/patch.js";
 import {
+  TEXT_NODE,
   buildKeyReport,
   cloneVdom,
-  createScopedKeyId,
   describePatch,
   escapeHtml,
+  formatPath,
   getVdomStats,
-  getVNodeKey,
   rootToHtml,
   summarizePatches,
   vdomToTreeString,
@@ -21,6 +21,7 @@ const DIFF_MODE_LABELS = {
 };
 
 const DEFAULT_LOG_MESSAGE = "Edit the HTML to preview diff or click Patch to apply it.";
+const DIFF_TYPE_PRIORITY = ["REMOVE", "CREATE", "REPLACE", "REORDER", "PROPS", "TEXT"];
 
 const elements = {
   actualRoot: document.querySelector("#actual-root"),
@@ -108,7 +109,7 @@ function handlePatch() {
   state.keyReport = buildKeyReport(state.actualVdom, state.previewVdom);
   renderPatchLog("No changes to apply.");
   renderKeyInspector();
-  decoratePreviewKeys();
+  renderPreviewDecorations();
 
   if (patches.length === 0) {
     state.statusMessage = "No changes to apply.";
@@ -127,6 +128,7 @@ function handlePatch() {
 
   syncEditor(nextVdom);
   renderVdomTrees();
+  renderActualDecorations(patches, state.keyReport);
   renderToolbarMeta();
 }
 
@@ -189,11 +191,12 @@ function pushHistory(vdom) {
 }
 
 function updatePreviewAnalysis(emptyMessage = DEFAULT_LOG_MESSAGE) {
+  clearActualDecorations();
   state.lastPatches = diff(state.actualVdom, state.previewVdom, { mode: state.diffMode });
   state.keyReport = buildKeyReport(state.actualVdom, state.previewVdom);
   renderPatchLog(emptyMessage);
   renderKeyInspector();
-  decoratePreviewKeys();
+  renderPreviewDecorations();
   renderToolbarMeta();
 }
 
@@ -306,44 +309,178 @@ function createKeyGroupMarkup(label, stateName, entries, formatter) {
   `;
 }
 
-function decoratePreviewKeys() {
-  clearPreviewKeyBadges();
+function renderPreviewDecorations() {
+  const surfaceState = buildPreviewSurfaceState();
+  applySurfaceAnnotations(elements.testRoot, state.previewVdom, surfaceState);
+}
 
-  if (!state.keyReport) {
-    return;
+function renderActualDecorations(patches, keyReport) {
+  const surfaceState = buildActualSurfaceState(patches, keyReport);
+  applySurfaceAnnotations(elements.actualRoot, state.actualVdom, surfaceState);
+}
+
+function buildPreviewSurfaceState() {
+  const annotationMap = createAnnotationMapFromPatches(state.lastPatches);
+  const keyBadges = new Map();
+
+  state.keyReport?.moved.forEach((entry) => {
+    addAnnotation(annotationMap, entry.pathLabel, "REORDER", `key ${entry.key} moved from ${entry.fromPathLabel}`);
+  });
+
+  state.keyReport?.added.forEach((entry) => {
+    addAnnotation(annotationMap, entry.pathLabel, "CREATE", `key ${entry.key} is new in test DOM`);
+  });
+
+  state.keyReport?.preserved.forEach((entry) => {
+    keyBadges.set(entry.pathLabel, {
+      label: `key:${entry.key} | kept`,
+      status: "preserved",
+      tooltip: `Key ${entry.key} is preserved.`,
+    });
+  });
+
+  state.keyReport?.moved.forEach((entry) => {
+    keyBadges.set(entry.pathLabel, {
+      label: `key:${entry.key} | moved`,
+      status: "moved",
+      tooltip: `Key ${entry.key} moved from ${entry.fromPathLabel} to ${entry.toPathLabel}.`,
+    });
+  });
+
+  state.keyReport?.added.forEach((entry) => {
+    keyBadges.set(entry.pathLabel, {
+      label: `key:${entry.key} | new`,
+      status: "added",
+      tooltip: `Key ${entry.key} is newly introduced.`,
+    });
+  });
+
+  return { annotationMap, keyBadges };
+}
+
+function buildActualSurfaceState(patches, keyReport) {
+  const annotationMap = createAnnotationMapFromPatches(patches);
+  const keyBadges = new Map();
+
+  keyReport?.added.forEach((entry) => {
+    keyBadges.set(entry.pathLabel, {
+      label: `new key:${entry.key}`,
+      status: "new",
+      tooltip: `This key was newly introduced in the last patch.`,
+    });
+  });
+
+  return { annotationMap, keyBadges };
+}
+
+function createAnnotationMapFromPatches(patches = []) {
+  const annotationMap = new Map();
+
+  patches.forEach((patch) => {
+    const targetPath = getPatchTargetPath(patch);
+    addAnnotation(annotationMap, formatPath(targetPath), patch.type, describePatch(patch));
+  });
+
+  return annotationMap;
+}
+
+function addAnnotation(annotationMap, pathLabel, type, message) {
+  if (!annotationMap.has(pathLabel)) {
+    annotationMap.set(pathLabel, {
+      types: new Set(),
+      messages: [],
+    });
   }
 
-  const childNodes = Array.from(elements.testRoot.childNodes);
-  (state.previewVdom?.children || []).forEach((childVNode, index) => {
-    walkPreviewDom(childNodes[index], childVNode, [index]);
+  const entry = annotationMap.get(pathLabel);
+  entry.types.add(type);
+
+  if (message) {
+    entry.messages.push(message);
+  }
+}
+
+function getPatchTargetPath(patch) {
+  if (patch.type === "TEXT" || patch.type === "REMOVE") {
+    return patch.path.slice(0, -1);
+  }
+
+  return patch.path;
+}
+
+function applySurfaceAnnotations(rootElement, rootVdom, surfaceState) {
+  clearSurfaceAnnotations(rootElement);
+
+  const childNodes = Array.from(rootElement.childNodes);
+  (rootVdom?.children || []).forEach((childVNode, index) => {
+    walkAnnotatedDom(childNodes[index], childVNode, [index], surfaceState);
   });
 }
 
-function walkPreviewDom(domNode, vnode, path) {
-  if (!domNode || !vnode || vnode.type === "TEXT") {
+function walkAnnotatedDom(domNode, vnode, path, surfaceState) {
+  if (!domNode || !vnode || vnode.type === TEXT_NODE) {
     return;
   }
 
-  const key = getVNodeKey(vnode);
-  if (key !== null && domNode.nodeType === Node.ELEMENT_NODE) {
-    const id = createScopedKeyId(path, key);
-    const status = state.keyReport?.previewStatusById.get(id) ?? "preserved";
+  if (domNode.nodeType === Node.ELEMENT_NODE) {
+    const pathLabel = formatPath(path);
+    const annotation = surfaceState.annotationMap.get(pathLabel);
+    const keyBadge = surfaceState.keyBadges.get(pathLabel);
+    const tooltipParts = [];
 
-    domNode.dataset.keyVisualState = status;
-    domNode.dataset.keyBadge = `key:${key} | ${status}`;
+    if (annotation) {
+      const primaryType = pickPrimaryType(annotation.types);
+      const orderedTypes = DIFF_TYPE_PRIORITY.filter((type) => annotation.types.has(type));
+
+      domNode.dataset.diffVisualState = primaryType.toLowerCase();
+      domNode.dataset.diffBadge = primaryType;
+      tooltipParts.push(`Diff case: ${orderedTypes.join(", ")}`);
+      tooltipParts.push(...annotation.messages);
+    }
+
+    if (keyBadge) {
+      domNode.dataset.keyVisualState = keyBadge.status;
+      domNode.dataset.keyBadge = keyBadge.label;
+      tooltipParts.push(keyBadge.tooltip);
+    }
+
+    if (tooltipParts.length > 0) {
+      const uniqueTooltip = [...new Set(tooltipParts)];
+
+      domNode.dataset.diffTitle = uniqueTooltip.join("\n");
+      domNode.title = domNode.dataset.diffTitle;
+    }
   }
 
   const domChildren = Array.from(domNode.childNodes);
   (vnode.children || []).forEach((childVNode, index) => {
-    walkPreviewDom(domChildren[index], childVNode, [...path, index]);
+    walkAnnotatedDom(domChildren[index], childVNode, [...path, index], surfaceState);
   });
 }
 
-function clearPreviewKeyBadges() {
-  elements.testRoot.querySelectorAll("[data-key-visual-state]").forEach((element) => {
+function pickPrimaryType(types) {
+  for (const type of DIFF_TYPE_PRIORITY) {
+    if (types.has(type)) {
+      return type;
+    }
+  }
+
+  return "TEXT";
+}
+
+function clearSurfaceAnnotations(rootElement) {
+  rootElement.querySelectorAll("[data-diff-visual-state], [data-key-badge], [data-diff-title]").forEach((element) => {
+    element.removeAttribute("data-diff-visual-state");
+    element.removeAttribute("data-diff-badge");
     element.removeAttribute("data-key-visual-state");
     element.removeAttribute("data-key-badge");
+    element.removeAttribute("data-diff-title");
+    element.removeAttribute("title");
   });
+}
+
+function clearActualDecorations() {
+  clearSurfaceAnnotations(elements.actualRoot);
 }
 
 function flashPatchedElements(targets = []) {
