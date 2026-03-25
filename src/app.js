@@ -24,6 +24,11 @@ const DEFAULT_EDITOR_HELP = "Edit the rendered preview directly. Use the block t
 const DIFF_TYPE_PRIORITY = ["REMOVE", "CREATE", "REPLACE", "REORDER", "PROPS", "TEXT"];
 const EDITABLE_BLOCK_SELECTOR = "p, li, h1, h2, h3, h4, h5, h6, blockquote, article, section, div";
 const PREVIEW_SYNC_MESSAGE = "The current actual and test VDOM match in this mode.";
+const LIST_FILL_PRESETS = [
+  { key: "dom", text: "Virtual DOM" },
+  { key: "diff", text: "Diff Algorithm" },
+  { key: "patch", text: "Patch Apply" },
+];
 
 const elements = {
   actualRoot: document.querySelector("#actual-root"),
@@ -189,11 +194,12 @@ function handlePatch() {
 
   const nextVdom = readEditorVdom();
   const patches = diff(state.actualVdom, nextVdom, { mode: state.diffMode });
+  const previewKeyReport = buildKeyReport(state.actualVdom, nextVdom);
 
   state.previewVdom = cloneVdom(nextVdom);
   renderVdomTrees();
   state.lastPatches = patches;
-  state.keyReport = buildKeyReport(state.actualVdom, state.previewVdom);
+  state.keyReport = previewKeyReport;
   renderPatchLog("No changes to apply.");
   renderKeyInspector();
   renderPreviewDecorations();
@@ -215,8 +221,8 @@ function handlePatch() {
 
   syncEditor(nextVdom);
   renderVdomTrees();
-  renderPreviewDecorations();
-  renderActualDecorations(patches, state.keyReport);
+  renderActualDecorations(patches, previewKeyReport);
+  resetSyncedPreviewState("Patch applied. Actual and test VDOM are synced again.");
   renderEditorStatus();
   updateSelectedBlockUI();
   renderToolbarMeta();
@@ -293,6 +299,14 @@ function updatePreviewAnalysis(emptyMessage = DEFAULT_LOG_MESSAGE) {
   renderToolbarMeta();
 }
 
+function resetSyncedPreviewState(message) {
+  state.lastPatches = [];
+  state.keyReport = buildKeyReport(state.actualVdom, state.previewVdom);
+  renderPatchLog(message);
+  renderKeyInspector();
+  renderPreviewDecorations();
+}
+
 function syncEditor(vdom) {
   withPreviewObserverPaused(() => {
     mountVdom(elements.testRoot, vdom);
@@ -366,6 +380,10 @@ function runEditorTool(action) {
     case "insert-keyed-item":
       focusTarget = insertListItem(activeBlock, true);
       state.statusMessage = "Inserted a new keyed list item.";
+      break;
+    case "fill-list":
+      focusTarget = fillList(activeBlock);
+      state.statusMessage = "Filled the current list with sample items.";
       break;
     case "assign-key":
       focusTarget = assignKeyToBlock(activeBlock);
@@ -506,6 +524,27 @@ function insertListItem(referenceBlock, keyed) {
   return listItem;
 }
 
+function fillList(block) {
+  const list = resolveEditableList(block);
+  const existingItems = Array.from(list.children).filter((child) => child.matches("li"));
+
+  LIST_FILL_PRESETS.forEach((preset, index) => {
+    const item = existingItems[index] ?? document.createElement("li");
+
+    item.textContent = preset.text;
+
+    if (!item.hasAttribute("data-key")) {
+      item.setAttribute("data-key", preset.key);
+    }
+
+    if (!existingItems[index]) {
+      list.appendChild(item);
+    }
+  });
+
+  return list.children[0] || list;
+}
+
 function assignKeyToBlock(block) {
   if (!block) {
     return ensureEditorHasContent();
@@ -567,6 +606,24 @@ function deleteBlock(block) {
   }
 
   return fallback || ensureEditorHasContent();
+}
+
+function resolveEditableList(block) {
+  const selectedList = block?.matches("ul, ol") ? block : null;
+  const currentItem = block?.closest("li");
+  const currentList = currentItem?.parentElement?.matches("ul, ol") ? currentItem.parentElement : null;
+
+  if (selectedList) {
+    return selectedList;
+  }
+
+  if (currentList) {
+    return currentList;
+  }
+
+  const list = document.createElement("ul");
+  insertBlockAfter(block, list);
+  return list;
 }
 
 function getNextEditableSibling(element) {

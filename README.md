@@ -122,6 +122,8 @@ The mini toolbar above the Test area provides:
   - Insert a list item.
 - `+ Keyed Item`
   - Insert a list item with an auto-generated key.
+- `Fill List`
+  - Fill the current list with sample keyed items for a quick diff demo.
 - `Key`
   - Assign an auto-generated key to the selected block.
 - `Prop`
