@@ -1,231 +1,247 @@
-import { DIFF_MODES, diff } from "./diff/diff.js";
+import { diff } from "./diff/diff.js";
 import { applyPatches } from "./patch/patch.js";
 import {
+  ROOT_NODE,
   TEXT_NODE,
-  buildKeyReport,
   cloneVdom,
-  describePatch,
+  createElementVNode,
+  createTextVNode,
   escapeHtml,
   formatPath,
-  getVdomStats,
-  summarizePatches,
-  vdomToTreeString,
+  getVNodeKey,
+  isKeySegment,
 } from "./utils/helpers.js";
 import { domChildrenToVdom } from "./vdom/domToVdom.js";
 import { mountVdom } from "./vdom/renderVdom.js";
 
-const DIFF_MODE_LABELS = {
-  [DIFF_MODES.AUTO]: "Auto (Keyed)",
-  [DIFF_MODES.INDEX]: "Index Only",
-};
-
-const DEFAULT_LOG_MESSAGE = "Edit the rendered VDOM preview to inspect diff, then click Patch to apply it.";
-const DEFAULT_EDITOR_HELP = "Edit the rendered preview directly. Use the block tools to add keys, props, and list items.";
 const DIFF_TYPE_PRIORITY = ["REMOVE", "CREATE", "REPLACE", "REORDER", "PROPS", "TEXT"];
-const EDITABLE_BLOCK_SELECTOR = "p, li, h1, h2, h3, h4, h5, h6, blockquote, article, section, div";
-const PREVIEW_SYNC_MESSAGE = "The current actual and test VDOM match in this mode.";
-const LIST_FILL_PRESETS = [
-  { key: "dom", text: "Virtual DOM" },
-  { key: "diff", text: "Diff Algorithm" },
-  { key: "patch", text: "Patch Apply" },
+const PATCH_LABELS_KO = {
+  TEXT: "텍스트",
+  PROPS: "속성",
+  CREATE: "생성",
+  REMOVE: "삭제",
+  REPLACE: "교체",
+  REORDER: "재정렬",
+};
+const DEFAULT_PREVIEW_STATUS = "오른쪽에서 diff 케이스를 하나 선택하면 Test VDOM이 만들어집니다.";
+const DEFAULT_ACTUAL_STATUS = "선택한 테스트 케이스를 적용하면 Actual DOM이 갱신됩니다.";
+
+const SCENARIOS = [
+  {
+    id: "text",
+    label: "1. 텍스트",
+    caseType: "TEXT",
+    description: "DOM 구조는 그대로 두고 텍스트 노드만 바꿉니다.",
+    apply(vdom) {
+      const nextText = toggleTextVariant(
+        vdom,
+        "intro-copy",
+        "이 문장은 텍스트만 바뀐 상태입니다. 주변 DOM 구조와 속성은 그대로 유지됩니다.",
+        "이 영역은 실제 DOM 대상입니다. 오른쪽 테스트 영역에서는 먼저 미리보기 Virtual DOM을 만든 뒤, Patch로 변경된 부분만 적용합니다.",
+      );
+
+      return {
+        vdom,
+        note: `텍스트 변경 케이스를 불러왔습니다: "${nextText}"`,
+      };
+    },
+  },
+  {
+    id: "props",
+    label: "2. 속성",
+    caseType: "PROPS",
+    description: "노드는 유지한 채 속성만 추가하거나 제거합니다.",
+    apply(vdom) {
+      const enabled = toggleNodeProp(vdom, "key-callout", "data-tone", "accent");
+      return {
+        vdom,
+        note: enabled
+          ? '`data-tone="accent"` 속성을 추가하는 케이스를 불러왔습니다.'
+          : "강조 속성을 제거하는 케이스를 불러왔습니다.",
+      };
+    },
+  },
+  {
+    id: "create",
+    label: "3. 생성",
+    caseType: "CREATE",
+    description: "새 keyed 리스트 항목을 추가해서 빠진 노드만 생성하도록 만듭니다.",
+    apply(vdom) {
+      const nextKey = getNextHistoryKey(vdom, "core-list");
+      const nextIndex = Number(nextKey.split("-").at(-1));
+      appendListItem(vdom, "core-list", {
+        key: nextKey,
+        text: `히스토리 스냅샷 ${nextIndex}이 새 keyed 항목으로 추가되었습니다.`,
+      });
+
+      return {
+        vdom,
+        note: `key "${nextKey}"를 가진 새 리스트 항목을 추가하는 케이스를 불러왔습니다.`,
+      };
+    },
+  },
+  {
+    id: "remove",
+    label: "4. 삭제",
+    caseType: "REMOVE",
+    description: "keyed 리스트 항목 하나만 삭제하고 나머지 형제 노드는 유지합니다.",
+    apply(vdom) {
+      const removedKey = removeOneListItem(vdom, "core-list");
+
+      return {
+        vdom,
+        note: removedKey
+          ? `key "${removedKey}" 항목을 삭제하는 케이스를 불러왔습니다.`
+          : "삭제할 keyed 항목이 더 이상 없어 변경이 발생하지 않았습니다.",
+      };
+    },
+  },
+  {
+    id: "replace",
+    label: "5. 교체",
+    caseType: "REPLACE",
+    description: "노드 타입 자체를 바꿔서 완전한 노드 교체가 일어나게 합니다.",
+    apply(vdom) {
+      const nextTag = replaceCalloutNode(vdom, "key-callout");
+
+      return {
+        vdom,
+        note:
+          nextTag === "p"
+            ? "blockquote가 paragraph로 바뀌는 교체 케이스를 불러왔습니다."
+            : "paragraph가 blockquote로 다시 바뀌는 교체 케이스를 불러왔습니다.",
+      };
+    },
+  },
 ];
 
 const elements = {
   actualRoot: document.querySelector("#actual-root"),
+  actualStatus: document.querySelector("#actual-status"),
+  actualChanges: document.querySelector("#actual-changes"),
   testRoot: document.querySelector("#test-root"),
-  editorStatus: document.querySelector("#editor-status"),
-  editorSelection: document.querySelector("#editor-selection"),
-  editorTools: Array.from(document.querySelectorAll("[data-editor-action]")),
+  testStatus: document.querySelector("#test-status"),
+  testChanges: document.querySelector("#test-changes"),
+  scenarioTitle: document.querySelector("#scenario-title"),
+  scenarioDescription: document.querySelector("#scenario-description"),
+  scenarioExpected: document.querySelector("#scenario-expected"),
+  scenarioButtons: Array.from(document.querySelectorAll("[data-scenario-id]")),
   patchButton: document.querySelector("#patch-button"),
+  resetButton: document.querySelector("#reset-button"),
   undoButton: document.querySelector("#undo-button"),
   redoButton: document.querySelector("#redo-button"),
-  historyStatus: document.querySelector("#history-status"),
-  diffModeStatus: document.querySelector("#diff-mode-status"),
-  patchCount: document.querySelector("#patch-count"),
-  patchStatus: document.querySelector("#patch-status"),
-  patchLog: document.querySelector("#patch-log"),
-  keySummary: document.querySelector("#key-summary"),
-  keyReport: document.querySelector("#key-report"),
-  diffModeButtons: Array.from(document.querySelectorAll("[data-diff-mode]")),
-  actualTree: document.querySelector("#actual-vdom-tree"),
-  previewTree: document.querySelector("#preview-vdom-tree"),
-  actualTreeSummary: document.querySelector("#actual-vdom-summary"),
-  previewTreeSummary: document.querySelector("#preview-vdom-summary"),
 };
 
 const state = {
-  history: [],
-  index: 0,
-  lastPatches: [],
+  baseVdom: null,
   actualVdom: null,
   previewVdom: null,
-  diffMode: DIFF_MODES.AUTO,
-  statusMessage: "Initial Virtual DOM is ready.",
+  selectedScenarioId: null,
+  pendingPatches: [],
+  lastAppliedPatches: [],
+  actualChangeFeed: [],
+  history: [],
+  index: 0,
   highlightTimer: null,
-  keyReport: null,
-  previewObserver: null,
-  syncFrame: null,
-  pendingSyncMessage: PREVIEW_SYNC_MESSAGE,
-  autoKeyCounter: 0,
 };
 
 bootstrap();
 
 function bootstrap() {
+  if (!elements.actualRoot || !elements.testRoot) {
+    return;
+  }
+
   const initialVdom = domChildrenToVdom(elements.actualRoot);
 
-  mountVdom(elements.actualRoot, initialVdom);
-  mountVdom(elements.testRoot, initialVdom);
-
-  state.history = [cloneVdom(initialVdom)];
-  state.index = 0;
-  state.lastPatches = [];
+  state.baseVdom = cloneVdom(initialVdom);
   state.actualVdom = cloneVdom(initialVdom);
   state.previewVdom = cloneVdom(initialVdom);
-  state.statusMessage = "Initial Virtual DOM is ready.";
+  state.history = [cloneVdom(initialVdom)];
+  state.index = 0;
 
-  syncEditor(initialVdom);
+  mountVdom(elements.actualRoot, state.actualVdom);
+  mountVdom(elements.testRoot, state.previewVdom);
   bindEvents();
-  renderModeButtons();
-  renderVdomTrees();
-  updatePreviewAnalysis(DEFAULT_LOG_MESSAGE);
-  renderEditorStatus();
-  updateSelectedBlockUI();
+  renderAll();
 }
 
 function bindEvents() {
-  elements.patchButton.addEventListener("click", handlePatch);
-  elements.undoButton.addEventListener("click", handleUndo);
-  elements.redoButton.addEventListener("click", handleRedo);
-  elements.testRoot.addEventListener("input", handleEditorInput);
-  elements.testRoot.addEventListener("click", handleEditorSelectionChange);
-  elements.testRoot.addEventListener("keyup", handleEditorSelectionChange);
-  document.addEventListener("selectionchange", handleEditorSelectionChange);
-
-  elements.diffModeButtons.forEach((button) => {
-    button.addEventListener("click", handleDiffModeChange);
+  elements.scenarioButtons.forEach((button) => {
+    button.addEventListener("click", handleScenarioSelect);
   });
 
-  elements.editorTools.forEach((button) => {
-    button.addEventListener("mousedown", (event) => {
-      event.preventDefault();
-    });
-    button.addEventListener("click", handleEditorToolAction);
-  });
-
-  startPreviewObserver();
+  elements.patchButton?.addEventListener("click", handlePatch);
+  elements.resetButton?.addEventListener("click", handleReset);
+  elements.undoButton?.addEventListener("click", handleUndo);
+  elements.redoButton?.addEventListener("click", handleRedo);
 }
 
-function handleEditorInput() {
-  queuePreviewSync(PREVIEW_SYNC_MESSAGE);
-}
+function handleScenarioSelect(event) {
+  const scenarioId = event.currentTarget.dataset.scenarioId;
+  const scenario = SCENARIOS.find((entry) => entry.id === scenarioId);
 
-function handleEditorSelectionChange() {
-  updateSelectedBlockUI();
-}
-
-function handleEditorToolAction(event) {
-  const action = event.currentTarget.dataset.editorAction;
-
-  if (!action) {
+  if (!scenario) {
     return;
   }
 
-  runEditorTool(action);
-}
+  const nextPreview = cloneVdom(state.actualVdom);
+  const result = scenario.apply(nextPreview);
 
-function startPreviewObserver() {
-  state.previewObserver = new MutationObserver(() => {
-    ensureEditorHasContent();
-    queuePreviewSync(PREVIEW_SYNC_MESSAGE);
-  });
+  state.selectedScenarioId = scenario.id;
+  state.previewVdom = cloneVdom(result.vdom);
+  state.pendingPatches = diff(state.actualVdom, state.previewVdom);
 
-  observePreviewRoot();
-}
-
-function observePreviewRoot() {
-  state.previewObserver?.observe(elements.testRoot, {
-    characterData: true,
-    childList: true,
-    subtree: true,
-  });
-}
-
-function withPreviewObserverPaused(task) {
-  if (!state.previewObserver) {
-    task();
-    return;
-  }
-
-  state.previewObserver.disconnect();
-
-  try {
-    task();
-  } finally {
-    observePreviewRoot();
-  }
-}
-
-function queuePreviewSync(message = PREVIEW_SYNC_MESSAGE) {
-  state.pendingSyncMessage = message;
-
-  if (state.syncFrame) {
-    return;
-  }
-
-  state.syncFrame = window.requestAnimationFrame(() => {
-    state.syncFrame = null;
-
-    const nextVdom = readEditorVdom();
-
-    state.previewVdom = cloneVdom(nextVdom);
-    renderVdomTrees();
-    updatePreviewAnalysis(state.pendingSyncMessage);
-    renderEditorStatus();
-    updateSelectedBlockUI();
-  });
+  mountVdom(elements.testRoot, state.previewVdom);
+  renderScenarioMeta(result.note);
+  renderPreviewChangeFeed();
+  renderPreviewDecorations();
+  renderScenarioButtons();
+  updateButtons();
 }
 
 function handlePatch() {
-  if (state.syncFrame) {
-    window.cancelAnimationFrame(state.syncFrame);
-    state.syncFrame = null;
-  }
-
-  const nextVdom = readEditorVdom();
-  const patches = diff(state.actualVdom, nextVdom, { mode: state.diffMode });
-  const previewKeyReport = buildKeyReport(state.actualVdom, nextVdom);
-
-  state.previewVdom = cloneVdom(nextVdom);
-  renderVdomTrees();
-  state.lastPatches = patches;
-  state.keyReport = previewKeyReport;
-  renderPatchLog("No changes to apply.");
-  renderKeyInspector();
-  renderPreviewDecorations();
-
-  if (patches.length === 0) {
-    state.statusMessage = "No changes to apply.";
-    renderToolbarMeta();
+  if (state.pendingPatches.length === 0) {
     return;
   }
 
-  const changedElements = applyPatches(elements.actualRoot, patches);
+  const previousActual = cloneVdom(state.actualVdom);
+  const appliedPatches = diff(state.actualVdom, state.previewVdom);
+  const changeFeed = buildActualChangeFeed(previousActual, appliedPatches);
+  const changedElements = applyPatches(elements.actualRoot, appliedPatches);
 
   flashPatchedElements(changedElements);
-  pushHistory(nextVdom);
 
-  state.actualVdom = cloneVdom(nextVdom);
-  state.previewVdom = cloneVdom(nextVdom);
-  state.statusMessage = `Patch applied with ${DIFF_MODE_LABELS[state.diffMode]}: ${summarizePatches(patches)}`;
+  state.actualVdom = cloneVdom(state.previewVdom);
+  state.lastAppliedPatches = appliedPatches;
+  state.actualChangeFeed = changeFeed;
+  state.selectedScenarioId = null;
+  state.pendingPatches = [];
+  pushHistory(state.actualVdom);
 
-  syncEditor(nextVdom);
-  renderVdomTrees();
-  renderActualDecorations(patches, previewKeyReport);
-  resetSyncedPreviewState("Patch applied. Actual and test VDOM are synced again.");
-  renderEditorStatus();
-  updateSelectedBlockUI();
-  renderToolbarMeta();
+  renderActualDecorations(appliedPatches);
+  mountVdom(elements.testRoot, state.actualVdom);
+  state.previewVdom = cloneVdom(state.actualVdom);
+  renderAll(`패치를 적용했습니다: ${summarizePatchTypes(appliedPatches)}. 다음 diff 케이스를 선택하세요.`);
+}
+
+function handleReset() {
+  const snapshot = cloneVdom(state.baseVdom);
+
+  state.actualVdom = cloneVdom(snapshot);
+  state.previewVdom = cloneVdom(snapshot);
+  state.selectedScenarioId = null;
+  state.pendingPatches = [];
+  state.lastAppliedPatches = [];
+  state.actualChangeFeed = [];
+  state.history = [cloneVdom(snapshot)];
+  state.index = 0;
+
+  mountVdom(elements.actualRoot, snapshot);
+  mountVdom(elements.testRoot, snapshot);
+  clearPatchedElements();
+  clearSurfaceAnnotations(elements.actualRoot);
+  renderAll("초기 Actual DOM 상태로 되돌렸습니다.");
 }
 
 function handleUndo() {
@@ -234,7 +250,7 @@ function handleUndo() {
   }
 
   state.index -= 1;
-  applyHistorySnapshot("Undo completed.");
+  applyHistorySnapshot("이전 Actual DOM 스냅샷으로 되돌렸습니다.");
 }
 
 function handleRedo() {
@@ -243,23 +259,7 @@ function handleRedo() {
   }
 
   state.index += 1;
-  applyHistorySnapshot("Redo completed.");
-}
-
-function handleDiffModeChange(event) {
-  const nextMode = event.currentTarget.dataset.diffMode;
-
-  if (!nextMode || nextMode === state.diffMode) {
-    return;
-  }
-
-  state.diffMode = nextMode;
-  state.statusMessage = `Diff mode changed to ${DIFF_MODE_LABELS[nextMode]}.`;
-
-  renderModeButtons();
-  updatePreviewAnalysis("The current actual and test VDOM match in this mode.");
-  renderEditorStatus();
-  renderToolbarMeta();
+  applyHistorySnapshot("다음 Actual DOM 스냅샷으로 다시 이동했습니다.");
 }
 
 function applyHistorySnapshot(message) {
@@ -267,570 +267,189 @@ function applyHistorySnapshot(message) {
 
   state.actualVdom = cloneVdom(snapshot);
   state.previewVdom = cloneVdom(snapshot);
-  state.lastPatches = [];
-  state.keyReport = buildKeyReport(state.actualVdom, state.previewVdom);
-  state.statusMessage = message;
+  state.selectedScenarioId = null;
+  state.pendingPatches = [];
+  state.lastAppliedPatches = [];
+  state.actualChangeFeed = [];
 
   mountVdom(elements.actualRoot, snapshot);
   mountVdom(elements.testRoot, snapshot);
-  syncEditor(snapshot);
   clearPatchedElements();
-  renderVdomTrees();
-  updatePreviewAnalysis(`${message} Actual and test VDOM are synced again.`);
-  renderEditorStatus();
-  updateSelectedBlockUI();
+  clearSurfaceAnnotations(elements.actualRoot);
+  renderAll(message);
 }
 
 function pushHistory(vdom) {
   const safeSnapshot = cloneVdom(vdom);
-
   state.history = state.history.slice(0, state.index + 1);
   state.history.push(safeSnapshot);
   state.index = state.history.length - 1;
 }
 
-function updatePreviewAnalysis(emptyMessage = DEFAULT_LOG_MESSAGE) {
-  clearActualDecorations();
-  state.lastPatches = diff(state.actualVdom, state.previewVdom, { mode: state.diffMode });
-  state.keyReport = buildKeyReport(state.actualVdom, state.previewVdom);
-  renderPatchLog(emptyMessage);
-  renderKeyInspector();
+function renderAll(statusMessage = DEFAULT_PREVIEW_STATUS) {
+  renderScenarioButtons();
+  renderScenarioMeta(statusMessage);
+  renderPreviewChangeFeed();
+  renderActualChangeFeed();
   renderPreviewDecorations();
-  renderToolbarMeta();
+  renderActualStatus();
+  updateButtons();
 }
 
-function resetSyncedPreviewState(message) {
-  state.lastPatches = [];
-  state.keyReport = buildKeyReport(state.actualVdom, state.previewVdom);
-  renderPatchLog(message);
-  renderKeyInspector();
-  renderPreviewDecorations();
-}
-
-function syncEditor(vdom) {
-  withPreviewObserverPaused(() => {
-    mountVdom(elements.testRoot, vdom);
-    ensureEditorHasContent();
+function renderScenarioButtons() {
+  elements.scenarioButtons.forEach((button) => {
+    const isActive = button.dataset.scenarioId === state.selectedScenarioId;
+    button.classList.toggle("is-active", isActive);
+    button.setAttribute("aria-pressed", String(isActive));
   });
 }
 
-function readEditorVdom() {
-  stripEditorArtifacts(elements.testRoot);
-  clearSurfaceAnnotations(elements.testRoot);
-  return domChildrenToVdom(elements.testRoot);
-}
+function renderScenarioMeta(message) {
+  const scenario = SCENARIOS.find((entry) => entry.id === state.selectedScenarioId);
 
-function renderEditorStatus() {
-  if (!elements.editorStatus) {
+  if (!scenario) {
+    elements.scenarioTitle.textContent = "Diff 케이스를 선택하세요";
+    elements.scenarioDescription.textContent = DEFAULT_PREVIEW_STATUS;
+    elements.scenarioExpected.textContent = "예상 패치 타입: 없음";
+    elements.testStatus.textContent = message || DEFAULT_PREVIEW_STATUS;
     return;
   }
 
-  elements.editorStatus.textContent = DEFAULT_EDITOR_HELP;
-  elements.editorStatus.classList.remove("editor__status--error");
+  elements.scenarioTitle.textContent = `${scenario.label} 시연`;
+  elements.scenarioDescription.textContent = scenario.description;
+  elements.scenarioExpected.textContent = `예상 패치 타입: ${PATCH_LABELS_KO[scenario.caseType]}`;
+  elements.testStatus.textContent = message;
 }
 
-function renderPatchLog(emptyMessage = DEFAULT_LOG_MESSAGE) {
-  if (state.lastPatches.length === 0) {
-    elements.patchLog.innerHTML = `<li class="patch-log__item patch-log__item--empty">${escapeHtml(emptyMessage)}</li>`;
+function renderPreviewChangeFeed() {
+  if (state.pendingPatches.length === 0) {
+    elements.testChanges.innerHTML = '<li class="change-list__item change-list__item--empty">Test DOM과 Actual DOM이 현재 동일합니다.</li>';
     return;
   }
 
-  elements.patchLog.innerHTML = state.lastPatches
+  elements.testChanges.innerHTML = state.pendingPatches
     .map(
       (patch) => `
-        <li class="patch-log__item patch-log__item--${escapeHtml(patch.type.toLowerCase())}">
-          <strong class="patch-log__type">${escapeHtml(patch.type)}</strong>
-          <span class="patch-log__text">${escapeHtml(describePatch(patch))}</span>
+        <li class="change-list__item change-list__item--pending">
+          <span class="change-list__badge">${escapeHtml(PATCH_LABELS_KO[patch.type] || patch.type)}</span>
+          <span class="change-list__text">${escapeHtml(describePatchKo(patch))}</span>
         </li>
       `,
     )
     .join("");
 }
 
-function renderToolbarMeta() {
-  const current = state.index + 1;
-  const total = state.history.length;
+function renderActualChangeFeed() {
+  if (state.actualChangeFeed.length === 0) {
+    elements.actualChanges.innerHTML =
+      '<li class="change-list__item change-list__item--empty">아직 적용된 패치가 없습니다. Actual DOM은 변경되지 않았습니다.</li>';
+    return;
+  }
 
-  elements.historyStatus.textContent = `History ${current} / ${total}`;
-  elements.diffModeStatus.textContent = `Mode ${DIFF_MODE_LABELS[state.diffMode]}`;
-  elements.patchCount.textContent = `Shown Patches ${state.lastPatches.length}`;
-  elements.patchStatus.textContent = state.statusMessage;
-  elements.patchButton.disabled = false;
+  elements.actualChanges.innerHTML = state.actualChangeFeed
+    .map(
+      (entry) => `
+        <li class="change-list__item change-list__item--${escapeHtml(entry.kind)}">
+          <span class="change-list__prefix">${escapeHtml(entry.prefix)}</span>
+          <span class="change-list__text">${escapeHtml(entry.text)}</span>
+        </li>
+      `,
+    )
+    .join("");
+}
+
+function renderActualStatus() {
+  const lastPatchSummary = state.lastAppliedPatches.length > 0 ? summarizePatchTypes(state.lastAppliedPatches) : DEFAULT_ACTUAL_STATUS;
+  elements.actualStatus.textContent = lastPatchSummary;
+}
+
+function updateButtons() {
+  elements.patchButton.disabled = state.pendingPatches.length === 0;
   elements.undoButton.disabled = state.index === 0;
-  elements.redoButton.disabled = state.index === total - 1;
+  elements.redoButton.disabled = state.index === state.history.length - 1;
 }
 
-function runEditorTool(action) {
-  const activeBlock = getSelectedEditableBlock() || ensureEditorHasContent();
-  let focusTarget = activeBlock;
+function buildActualChangeFeed(oldVdom, patches) {
+  const entries = [];
 
-  switch (action) {
-    case "insert-paragraph":
-      focusTarget = insertBlockAfter(activeBlock, createBlockElement("p", "New paragraph"));
-      state.statusMessage = "Inserted a new paragraph block.";
-      break;
-    case "insert-heading":
-      focusTarget = insertBlockAfter(activeBlock, createBlockElement("h3", "New heading"));
-      state.statusMessage = "Inserted a new heading block.";
-      break;
-    case "insert-list":
-      focusTarget = insertListItem(activeBlock, false);
-      state.statusMessage = "Inserted a new list item block.";
-      break;
-    case "insert-keyed-item":
-      focusTarget = insertListItem(activeBlock, true);
-      state.statusMessage = "Inserted a new keyed list item.";
-      break;
-    case "fill-list":
-      focusTarget = fillList(activeBlock);
-      state.statusMessage = "Filled the current list with sample items.";
-      break;
-    case "assign-key":
-      focusTarget = assignKeyToBlock(activeBlock);
-      break;
-    case "toggle-prop":
-      focusTarget = toggleBlockProp(activeBlock);
-      break;
-    case "duplicate-block":
-      focusTarget = duplicateBlock(activeBlock);
-      state.statusMessage = "Duplicated the selected block.";
-      break;
-    case "delete-block":
-      focusTarget = deleteBlock(activeBlock);
-      state.statusMessage = "Deleted the selected block.";
-      break;
-    default:
-      return;
-  }
+  patches.forEach((patch) => {
+    const previousNode = getVNodeAtPath(oldVdom, patch.path);
 
-  ensureEditorHasContent();
-  updateSelectedBlockUI(focusTarget);
-  focusBlock(focusTarget);
-  queuePreviewSync("Editor tools updated the preview VDOM.");
-  renderToolbarMeta();
-}
-
-function ensureEditorHasContent() {
-  const firstBlock = elements.testRoot.firstElementChild;
-
-  if (firstBlock) {
-    return firstBlock;
-  }
-
-  const paragraph = createBlockElement("p", "Start typing here.");
-  elements.testRoot.appendChild(paragraph);
-  return paragraph;
-}
-
-function getSelectedEditableBlock() {
-  const selection = window.getSelection();
-
-  if (!selection || selection.rangeCount === 0) {
-    return null;
-  }
-
-  return getEditableBlockFromNode(selection.anchorNode);
-}
-
-function getEditableBlockFromNode(node) {
-  const element = node?.nodeType === Node.TEXT_NODE ? node.parentElement : node;
-
-  if (!element || !elements.testRoot.contains(element)) {
-    return null;
-  }
-
-  const block = element.closest(EDITABLE_BLOCK_SELECTOR);
-
-  if (!block || block === elements.testRoot || !elements.testRoot.contains(block)) {
-    return null;
-  }
-
-  return block;
-}
-
-function updateSelectedBlockUI(forcedBlock = null) {
-  stripEditorArtifacts(elements.testRoot);
-
-  const activeBlock = forcedBlock || getSelectedEditableBlock();
-
-  if (!activeBlock || !elements.testRoot.contains(activeBlock)) {
-    if (elements.editorSelection) {
-      elements.editorSelection.textContent = "Selected: none";
-    }
-    return;
-  }
-
-  activeBlock.dataset.editorSelected = "true";
-
-  if (!elements.editorSelection) {
-    return;
-  }
-
-  const tagName = activeBlock.tagName.toLowerCase();
-  const key = activeBlock.getAttribute("data-key");
-  const tone = activeBlock.getAttribute("data-tone");
-  const parts = [`Selected: <${tagName}>`];
-
-  if (key) {
-    parts.push(`key ${key}`);
-  }
-
-  if (tone) {
-    parts.push(`prop ${tone}`);
-  }
-
-  elements.editorSelection.textContent = parts.join(" | ");
-}
-
-function stripEditorArtifacts(rootElement) {
-  rootElement.querySelectorAll("[data-editor-selected]").forEach((element) => {
-    element.removeAttribute("data-editor-selected");
-  });
-}
-
-function createBlockElement(tagName, textContent) {
-  const element = document.createElement(tagName);
-  element.textContent = textContent;
-  return element;
-}
-
-function insertBlockAfter(referenceBlock, newBlock) {
-  if (!referenceBlock || !referenceBlock.parentNode) {
-    elements.testRoot.appendChild(newBlock);
-    return newBlock;
-  }
-
-  referenceBlock.parentNode.insertBefore(newBlock, referenceBlock.nextSibling);
-  return newBlock;
-}
-
-function insertListItem(referenceBlock, keyed) {
-  const currentItem = referenceBlock?.closest("li");
-  const currentList = currentItem?.parentElement?.matches("ul, ol") ? currentItem.parentElement : null;
-  const listItem = createBlockElement("li", keyed ? "New keyed item" : "New list item");
-
-  if (keyed) {
-    listItem.setAttribute("data-key", generateAutoKey("item"));
-  }
-
-  if (currentItem && currentList) {
-    currentList.insertBefore(listItem, currentItem.nextSibling);
-    return listItem;
-  }
-
-  const list = document.createElement("ul");
-  list.appendChild(listItem);
-  insertBlockAfter(referenceBlock, list);
-  return listItem;
-}
-
-function fillList(block) {
-  const list = resolveEditableList(block);
-  const existingItems = Array.from(list.children).filter((child) => child.matches("li"));
-
-  LIST_FILL_PRESETS.forEach((preset, index) => {
-    const item = existingItems[index] ?? document.createElement("li");
-
-    item.textContent = preset.text;
-
-    if (!item.hasAttribute("data-key")) {
-      item.setAttribute("data-key", preset.key);
-    }
-
-    if (!existingItems[index]) {
-      list.appendChild(item);
+    switch (patch.type) {
+      case "CREATE":
+        entries.push({
+          kind: "add",
+          prefix: "+",
+          text: `${formatVNodeSummary(patch.node)} 생성됨 (${formatPath(patch.path)})`,
+        });
+        break;
+      case "REMOVE":
+        entries.push({
+          kind: "remove",
+          prefix: "-",
+          text: `${formatVNodeSummary(previousNode)} 삭제됨 (${formatPath(patch.path)})`,
+        });
+        break;
+      case "REPLACE":
+        entries.push({
+          kind: "edit",
+          prefix: "~",
+          text: `노드 교체: ${formatVNodeSummary(previousNode)} -> ${formatVNodeSummary(patch.node)} (${formatPath(patch.path)})`,
+        });
+        break;
+      case "TEXT":
+        entries.push({
+          kind: "edit",
+          prefix: "~",
+          text: `텍스트 변경: "${truncateText(previousNode?.value || "", 84)}" -> "${truncateText(patch.value || "", 84)}"`,
+        });
+        break;
+      case "PROPS":
+        Object.entries(patch.props || {}).forEach(([name, value]) => {
+          const previousValue = previousNode?.props?.[name] ?? null;
+          entries.push({
+            kind: "edit",
+            prefix: "~",
+            text: `${formatVNodeSummary(previousNode)} ${name}: ${formatNullable(previousValue)} -> ${formatNullable(value)}`,
+          });
+        });
+        break;
+      case "REORDER":
+        entries.push({
+          kind: "edit",
+          prefix: "~",
+          text: `${formatVNodeSummary(previousNode)} 내부 keyed 자식 순서가 변경되었습니다.`,
+        });
+        break;
+      default:
+        break;
     }
   });
 
-  return list.children[0] || list;
+  return entries;
 }
 
-function assignKeyToBlock(block) {
-  if (!block) {
-    return ensureEditorHasContent();
-  }
+function summarizePatchTypes(patches) {
+  const counts = patches.reduce((summary, patch) => {
+    summary[patch.type] = (summary[patch.type] || 0) + 1;
+    return summary;
+  }, {});
 
-  if (block.hasAttribute("data-key")) {
-    state.statusMessage = `Selected block already has key ${block.getAttribute("data-key")}.`;
-    return block;
-  }
-
-  const nextKey = generateAutoKey(block.tagName.toLowerCase());
-  block.setAttribute("data-key", nextKey);
-  state.statusMessage = `Assigned key ${nextKey} to the selected block.`;
-  return block;
-}
-
-function toggleBlockProp(block) {
-  if (!block) {
-    return ensureEditorHasContent();
-  }
-
-  const nextTone = block.getAttribute("data-tone") === "accent" ? null : "accent";
-
-  if (nextTone === null) {
-    block.removeAttribute("data-tone");
-    state.statusMessage = "Removed the accent prop from the selected block.";
-    return block;
-  }
-
-  block.setAttribute("data-tone", nextTone);
-  state.statusMessage = "Applied an accent prop to the selected block.";
-  return block;
-}
-
-function duplicateBlock(block) {
-  if (!block) {
-    return ensureEditorHasContent();
-  }
-
-  const clone = block.cloneNode(true);
-  refreshKeysInSubtree(clone);
-  return insertBlockAfter(block, clone);
-}
-
-function deleteBlock(block) {
-  if (!block || !block.parentNode) {
-    return ensureEditorHasContent();
-  }
-
-  const fallback = getNextEditableSibling(block) || getPreviousEditableSibling(block);
-  const listParent = block.parentElement?.matches("ul, ol") ? block.parentElement : null;
-
-  block.remove();
-
-  if (listParent && listParent.children.length === 0) {
-    const listFallback = getNextEditableSibling(listParent) || getPreviousEditableSibling(listParent);
-    listParent.remove();
-    return listFallback || ensureEditorHasContent();
-  }
-
-  return fallback || ensureEditorHasContent();
-}
-
-function resolveEditableList(block) {
-  const selectedList = block?.matches("ul, ol") ? block : null;
-  const currentItem = block?.closest("li");
-  const currentList = currentItem?.parentElement?.matches("ul, ol") ? currentItem.parentElement : null;
-
-  if (selectedList) {
-    return selectedList;
-  }
-
-  if (currentList) {
-    return currentList;
-  }
-
-  const list = document.createElement("ul");
-  insertBlockAfter(block, list);
-  return list;
-}
-
-function getNextEditableSibling(element) {
-  let current = element?.nextElementSibling ?? null;
-
-  while (current) {
-    if (current.matches(EDITABLE_BLOCK_SELECTOR) || current.matches("ul, ol")) {
-      return current.matches("ul, ol") ? current.firstElementChild : current;
-    }
-
-    current = current.nextElementSibling;
-  }
-
-  return null;
-}
-
-function getPreviousEditableSibling(element) {
-  let current = element?.previousElementSibling ?? null;
-
-  while (current) {
-    if (current.matches(EDITABLE_BLOCK_SELECTOR) || current.matches("ul, ol")) {
-      return current.matches("ul, ol") ? current.lastElementChild : current;
-    }
-
-    current = current.previousElementSibling;
-  }
-
-  return null;
-}
-
-function refreshKeysInSubtree(rootNode) {
-  if (rootNode.nodeType !== Node.ELEMENT_NODE) {
-    return;
-  }
-
-  if (rootNode.hasAttribute("data-key")) {
-    rootNode.setAttribute("data-key", generateAutoKey(rootNode.tagName.toLowerCase()));
-  }
-
-  rootNode.querySelectorAll("[data-key]").forEach((element) => {
-    element.setAttribute("data-key", generateAutoKey(element.tagName.toLowerCase()));
-  });
-}
-
-function generateAutoKey(prefix = "node") {
-  state.autoKeyCounter += 1;
-  return `${prefix}-${state.autoKeyCounter}`;
-}
-
-function focusBlock(block) {
-  if (!block || !block.isConnected) {
-    elements.testRoot.focus();
-    return;
-  }
-
-  const target = block.matches("ul, ol") ? block.firstElementChild || block : block;
-  const selection = window.getSelection();
-  const range = document.createRange();
-
-  if (!target.firstChild) {
-    target.appendChild(document.createTextNode(""));
-  }
-
-  range.selectNodeContents(target);
-  range.collapse(false);
-  selection?.removeAllRanges();
-  selection?.addRange(range);
-  elements.testRoot.focus();
-}
-
-function renderModeButtons() {
-  elements.diffModeButtons.forEach((button) => {
-    const isActive = button.dataset.diffMode === state.diffMode;
-    button.classList.toggle("is-active", isActive);
-    button.setAttribute("aria-pressed", String(isActive));
-  });
-}
-
-function renderVdomTrees() {
-  renderTreePanel(elements.actualTreeSummary, elements.actualTree, state.actualVdom);
-  renderTreePanel(elements.previewTreeSummary, elements.previewTree, state.previewVdom);
-}
-
-function renderTreePanel(summaryElement, treeElement, vnode) {
-  const stats = getVdomStats(vnode);
-
-  summaryElement.textContent = `Nodes ${stats.nodes} | Elements ${stats.elements} | Text ${stats.texts} | Depth ${stats.maxDepth}`;
-  treeElement.textContent = vdomToTreeString(vnode);
-}
-
-function renderKeyInspector() {
-  const report = state.keyReport;
-
-  if (!report) {
-    elements.keySummary.textContent = "No key report available yet.";
-    elements.keyReport.innerHTML = `<li class="key-report__item key-report__item--empty">${escapeHtml(DEFAULT_LOG_MESSAGE)}</li>`;
-    return;
-  }
-
-  const summary = report.summary;
-  elements.keySummary.textContent =
-    `Actual ${summary.actualKeys} | Test ${summary.previewKeys} | Preserved ${summary.preserved} | Moved ${summary.moved} | Added ${summary.added} | Removed ${summary.removed}`;
-
-  const groups = [
-    createKeyGroupMarkup("Preserved", "preserved", report.preserved, (entry) => `${entry.key} stays at ${entry.pathLabel}`),
-    createKeyGroupMarkup("Moved", "moved", report.moved, (entry) => `${entry.key} moves ${entry.fromPathLabel} -> ${entry.toPathLabel}`),
-    createKeyGroupMarkup("Added", "added", report.added, (entry) => `${entry.key} appears at ${entry.pathLabel}`),
-    createKeyGroupMarkup("Removed", "removed", report.removed, (entry) => `${entry.key} disappears from ${entry.pathLabel}`),
-  ].filter(Boolean);
-
-  if (groups.length === 0) {
-    elements.keyReport.innerHTML = `<li class="key-report__item key-report__item--empty">No keyed elements found. Add a <code>"key"</code> field to compare identity.</li>`;
-    return;
-  }
-
-  elements.keyReport.innerHTML = groups.join("");
-}
-
-function createKeyGroupMarkup(label, stateName, entries, formatter) {
-  if (!entries || entries.length === 0) {
-    return "";
-  }
-
-  return `
-    <li class="key-report__group">
-      <div class="key-report__group-header">
-        <strong>${escapeHtml(label)}</strong>
-        <span class="key-report__count">${entries.length}</span>
-      </div>
-      <ul class="key-report__group-list">
-        ${entries
-          .map(
-            (entry) => `
-              <li class="key-report__item key-report__item--${escapeHtml(stateName)}">
-                <span class="key-report__badge">${escapeHtml(entry.tagName)}</span>
-                <span class="key-report__text">${escapeHtml(formatter(entry))}</span>
-              </li>
-            `,
-          )
-          .join("")}
-      </ul>
-    </li>
-  `;
+  return Object.entries(counts)
+    .map(([type, count]) => `${PATCH_LABELS_KO[type] || type} ${count}개`)
+    .join(" | ");
 }
 
 function renderPreviewDecorations() {
-  const surfaceState = buildPreviewSurfaceState();
-  applySurfaceAnnotations(elements.testRoot, state.previewVdom, surfaceState);
+  const annotationMap = createAnnotationMapFromPatches(state.pendingPatches);
+  const keyBadges = createKeyBadgeMap(state.pendingPatches);
+  applySurfaceAnnotations(elements.testRoot, state.previewVdom, { annotationMap, keyBadges });
 }
 
-function renderActualDecorations(patches, keyReport) {
-  const surfaceState = buildActualSurfaceState(patches, keyReport);
-  applySurfaceAnnotations(elements.actualRoot, state.actualVdom, surfaceState);
-}
-
-function buildPreviewSurfaceState() {
-  const annotationMap = createAnnotationMapFromPatches(state.lastPatches);
-  const keyBadges = new Map();
-
-  state.keyReport?.moved.forEach((entry) => {
-    addAnnotation(annotationMap, entry.pathLabel, "REORDER", `key ${entry.key} moved from ${entry.fromPathLabel}`);
-  });
-
-  state.keyReport?.added.forEach((entry) => {
-    addAnnotation(annotationMap, entry.pathLabel, "CREATE", `key ${entry.key} is new in test DOM`);
-  });
-
-  state.keyReport?.preserved.forEach((entry) => {
-    keyBadges.set(entry.pathLabel, {
-      label: `key:${entry.key} | kept`,
-      status: "preserved",
-      tooltip: `Key ${entry.key} is preserved.`,
-    });
-  });
-
-  state.keyReport?.moved.forEach((entry) => {
-    keyBadges.set(entry.pathLabel, {
-      label: `key:${entry.key} | moved`,
-      status: "moved",
-      tooltip: `Key ${entry.key} moved from ${entry.fromPathLabel} to ${entry.toPathLabel}.`,
-    });
-  });
-
-  state.keyReport?.added.forEach((entry) => {
-    keyBadges.set(entry.pathLabel, {
-      label: `key:${entry.key} | new`,
-      status: "added",
-      tooltip: `Key ${entry.key} is newly introduced.`,
-    });
-  });
-
-  return { annotationMap, keyBadges };
-}
-
-function buildActualSurfaceState(patches, keyReport) {
+function renderActualDecorations(patches) {
   const annotationMap = createAnnotationMapFromPatches(patches);
-  const keyBadges = new Map();
-
-  keyReport?.added.forEach((entry) => {
-    keyBadges.set(entry.pathLabel, {
-      label: `new key:${entry.key}`,
-      status: "new",
-      tooltip: `This key was newly introduced in the last patch.`,
-    });
-  });
-
-  return { annotationMap, keyBadges };
+  const keyBadges = createKeyBadgeMap(patches);
+  applySurfaceAnnotations(elements.actualRoot, state.actualVdom, { annotationMap, keyBadges });
 }
 
 function createAnnotationMapFromPatches(patches = []) {
@@ -838,10 +457,41 @@ function createAnnotationMapFromPatches(patches = []) {
 
   patches.forEach((patch) => {
     const targetPath = getPatchTargetPath(patch);
-    addAnnotation(annotationMap, formatPath(targetPath), patch.type, describePatch(patch));
+    addAnnotation(annotationMap, formatPath(targetPath), patch.type, describePatchKo(patch));
   });
 
   return annotationMap;
+}
+
+function createKeyBadgeMap(patches = []) {
+  const keyBadges = new Map();
+
+  patches.forEach((patch) => {
+    if (patch.type !== "CREATE") {
+      return;
+    }
+
+    const nextKey = getVNodeKey(patch.node);
+    if (!nextKey) {
+      return;
+    }
+
+    keyBadges.set(formatPath(patch.path), {
+      label: `키:${nextKey}`,
+      status: "new",
+      tooltip: `새 keyed 노드 "${nextKey}"가 이 위치에 생성되었습니다.`,
+    });
+  });
+
+  return keyBadges;
+}
+
+function getPatchTargetPath(patch) {
+  if (patch.type === "TEXT" || patch.type === "REMOVE") {
+    return patch.path.slice(0, -1);
+  }
+
+  return patch.path;
 }
 
 function addAnnotation(annotationMap, pathLabel, type, message) {
@@ -858,14 +508,6 @@ function addAnnotation(annotationMap, pathLabel, type, message) {
   if (message) {
     entry.messages.push(message);
   }
-}
-
-function getPatchTargetPath(patch) {
-  if (patch.type === "TEXT" || patch.type === "REMOVE") {
-    return patch.path.slice(0, -1);
-  }
-
-  return patch.path;
 }
 
 function applySurfaceAnnotations(rootElement, rootVdom, surfaceState) {
@@ -893,8 +535,8 @@ function walkAnnotatedDom(domNode, vnode, path, surfaceState) {
       const orderedTypes = DIFF_TYPE_PRIORITY.filter((type) => annotation.types.has(type));
 
       domNode.dataset.diffVisualState = primaryType.toLowerCase();
-      domNode.dataset.diffBadge = primaryType;
-      tooltipParts.push(`Diff case: ${orderedTypes.join(", ")}`);
+      domNode.dataset.diffBadge = PATCH_LABELS_KO[primaryType] || primaryType;
+      tooltipParts.push(`Diff 케이스: ${orderedTypes.map((type) => PATCH_LABELS_KO[type] || type).join(", ")}`);
       tooltipParts.push(...annotation.messages);
     }
 
@@ -905,16 +547,23 @@ function walkAnnotatedDom(domNode, vnode, path, surfaceState) {
     }
 
     if (tooltipParts.length > 0) {
-      const uniqueTooltip = [...new Set(tooltipParts)];
-
-      domNode.dataset.diffTitle = uniqueTooltip.join("\n");
-      domNode.title = domNode.dataset.diffTitle;
+      domNode.title = [...new Set(tooltipParts)].join("\n");
     }
   }
 
   const domChildren = Array.from(domNode.childNodes);
   (vnode.children || []).forEach((childVNode, index) => {
     walkAnnotatedDom(domChildren[index], childVNode, [...path, index], surfaceState);
+  });
+}
+
+function clearSurfaceAnnotations(rootElement) {
+  rootElement.querySelectorAll("[data-diff-visual-state], [data-key-visual-state]").forEach((element) => {
+    element.removeAttribute("data-diff-visual-state");
+    element.removeAttribute("data-diff-badge");
+    element.removeAttribute("data-key-visual-state");
+    element.removeAttribute("data-key-badge");
+    element.removeAttribute("title");
   });
 }
 
@@ -926,21 +575,6 @@ function pickPrimaryType(types) {
   }
 
   return "TEXT";
-}
-
-function clearSurfaceAnnotations(rootElement) {
-  rootElement.querySelectorAll("[data-diff-visual-state], [data-key-badge], [data-diff-title]").forEach((element) => {
-    element.removeAttribute("data-diff-visual-state");
-    element.removeAttribute("data-diff-badge");
-    element.removeAttribute("data-key-visual-state");
-    element.removeAttribute("data-key-badge");
-    element.removeAttribute("data-diff-title");
-    element.removeAttribute("title");
-  });
-}
-
-function clearActualDecorations() {
-  clearSurfaceAnnotations(elements.actualRoot);
 }
 
 function flashPatchedElements(targets = []) {
@@ -974,4 +608,231 @@ function clearPatchedElements() {
   });
 }
 
-// TODO: Persist per-history patch logs if the demo needs timeline playback later.
+function toggleTextVariant(vdom, key, variantA, variantB) {
+  let nextText = variantA;
+
+  updateNodeByKey(vdom, key, (node) => {
+    const currentText = getNodeText(node);
+    nextText = currentText === variantA ? variantB : variantA;
+    node.children = [createTextVNode(nextText)];
+  });
+
+  return nextText;
+}
+
+function toggleNodeProp(vdom, key, propName, propValue) {
+  let enabled = false;
+
+  updateNodeByKey(vdom, key, (node) => {
+    const props = { ...(node.props || {}) };
+    if (props[propName] === propValue) {
+      delete props[propName];
+      enabled = false;
+    } else {
+      props[propName] = propValue;
+      enabled = true;
+    }
+    node.props = props;
+  });
+
+  return enabled;
+}
+
+function appendListItem(vdom, listKey, item) {
+  updateNodeByKey(vdom, listKey, (node) => {
+    node.children = [
+      ...(node.children || []),
+      createElementVNode("li", { "data-key": item.key }, [createTextVNode(item.text)]),
+    ];
+  });
+}
+
+function removeOneListItem(vdom, listKey) {
+  const listNode = findNodeByKey(vdom, listKey);
+  if (!listNode || !Array.isArray(listNode.children) || listNode.children.length === 0) {
+    return null;
+  }
+
+  const candidates = listNode.children
+    .map((child, index) => ({ child, index, key: getVNodeKey(child) }))
+    .filter((entry) => entry.key);
+
+  if (candidates.length <= 1) {
+    return null;
+  }
+
+  const preferred = candidates.find((entry) => entry.key?.startsWith("history-")) || candidates.find((entry) => entry.key === "diff") || candidates.at(-1);
+  listNode.children.splice(preferred.index, 1);
+  return preferred.key;
+}
+
+function replaceCalloutNode(vdom, key) {
+  let nextTag = "p";
+
+  replaceNodeByKey(vdom, key, (node) => {
+    nextTag = node.tagName === "blockquote" ? "p" : "blockquote";
+    const nextClass = nextTag === "blockquote" ? "doc-block doc-block--callout" : "doc-block doc-block--paragraph";
+    return createElementVNode(nextTag, { "data-key": key, class: nextClass }, [createTextVNode(getNodeText(node))]);
+  });
+
+  return nextTag;
+}
+
+function getNextHistoryKey(vdom, listKey) {
+  const listNode = findNodeByKey(vdom, listKey);
+  const currentIndexes = new Set(
+    (listNode?.children || [])
+      .map((child) => getVNodeKey(child))
+      .filter((key) => /^history-\d+$/.test(key))
+      .map((key) => Number(key.split("-").at(-1))),
+  );
+
+  let nextIndex = 1;
+  while (currentIndexes.has(nextIndex)) {
+    nextIndex += 1;
+  }
+
+  return `history-${nextIndex}`;
+}
+
+function updateNodeByKey(vnode, key, updater) {
+  if (!vnode) {
+    return false;
+  }
+
+  if (vnode.type === ROOT_NODE) {
+    return vnode.children.some((child) => updateNodeByKey(child, key, updater));
+  }
+
+  if (vnode.type === TEXT_NODE) {
+    return false;
+  }
+
+  if (getVNodeKey(vnode) === key) {
+    updater(vnode);
+    return true;
+  }
+
+  return (vnode.children || []).some((child) => updateNodeByKey(child, key, updater));
+}
+
+function replaceNodeByKey(vnode, key, replacer) {
+  if (!vnode || vnode.type === TEXT_NODE) {
+    return false;
+  }
+
+  const children = vnode.type === ROOT_NODE ? vnode.children : vnode.children || [];
+
+  for (let index = 0; index < children.length; index += 1) {
+    const child = children[index];
+
+    if (child?.type !== TEXT_NODE && getVNodeKey(child) === key) {
+      children[index] = replacer(child);
+      return true;
+    }
+
+    if (replaceNodeByKey(child, key, replacer)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function findNodeByKey(vnode, key) {
+  if (!vnode || vnode.type === TEXT_NODE) {
+    return null;
+  }
+
+  if (vnode.type !== ROOT_NODE && getVNodeKey(vnode) === key) {
+    return vnode;
+  }
+
+  for (const child of vnode.children || []) {
+    const found = findNodeByKey(child, key);
+    if (found) {
+      return found;
+    }
+  }
+
+  return null;
+}
+
+function getVNodeAtPath(vnode, path = []) {
+  return path.reduce((currentNode, segment) => {
+    if (!currentNode) {
+      return null;
+    }
+
+    if (isKeySegment(segment)) {
+      return (currentNode.children || []).find((child) => getVNodeKey(child) === String(segment.value)) ?? null;
+    }
+
+    return currentNode.children?.[segment] ?? null;
+  }, vnode);
+}
+
+function getNodeText(vnode) {
+  if (!vnode) {
+    return "";
+  }
+
+  if (vnode.type === TEXT_NODE) {
+    return vnode.value;
+  }
+
+  return (vnode.children || [])
+    .map((child) => getNodeText(child))
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function formatVNodeSummary(vnode) {
+  if (!vnode) {
+    return "노드";
+  }
+
+  if (vnode.type === TEXT_NODE) {
+    return `"${truncateText(vnode.value, 56)}"`;
+  }
+
+  const key = getVNodeKey(vnode);
+  const text = getNodeText(vnode);
+  return `<${vnode.tagName}${key ? ` key="${key}"` : ""}> ${truncateText(text, 56)}`.trim();
+}
+
+function describePatchKo(patch) {
+  const location = formatPath(patch.path);
+
+  switch (patch.type) {
+    case "TEXT":
+      return `${location}: 텍스트를 "${truncateText(patch.value, 48)}"(으)로 변경`;
+    case "PROPS":
+      return `${location}: 속성 ${Object.keys(patch.props || {}).join(", ")} 변경`;
+    case "REPLACE":
+      return `${location}: 노드를 ${patch.node?.tagName || patch.node?.type || "새 노드"}(으)로 교체`;
+    case "REMOVE":
+      return `${location}: 노드 삭제`;
+    case "CREATE":
+      return `${location}: 새 노드 생성`;
+    case "REORDER":
+      return `${location}: keyed 자식 순서 변경`;
+    default:
+      return `${location}: ${patch.type}`;
+  }
+}
+
+function truncateText(value = "", maxLength = 56) {
+  const normalized = String(value).replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxLength - 3)}...`;
+}
+
+function formatNullable(value) {
+  return value === null || value === undefined ? "없음" : String(value);
+}
+
+// TODO: Add an optional REORDER bonus scenario if keyed move visualization needs to be demonstrated separately.

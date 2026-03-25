@@ -3,232 +3,92 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Virtual DOM Playground</title>
+    <title>가상 DOM Diff 시연</title>
     <link rel="stylesheet" href="./styles/style.css" />
   </head>
   <body>
-    <main class="app-shell">
-      <header class="hero">
-        <p class="hero__eyebrow">Vanilla JavaScript Demo</p>
-        <h1>Virtual DOM / Diff / Patch Visualizer</h1>
-        <p class="hero__body">
-          Convert the live DOM into a Virtual DOM tree, edit the rendered preview directly,
-          compare previous and next trees, and patch only the changed parts.
-          Switch diff mode to compare keyed reconciliation against index-based comparison.
-        </p>
-      </header>
-
-      <section class="toolbar">
-        <div class="toolbar__row">
-          <div class="toolbar__actions">
-            <button id="patch-button" class="button button--primary" type="button">Patch</button>
-            <button id="undo-button" class="button" type="button">Undo</button>
-            <button id="redo-button" class="button" type="button">Redo</button>
+    <main class="workspace">
+      <article class="panel">
+        <div class="panel__header">
+          <div>
+            <p class="panel__eyebrow">실제 영역</p>
+            <h1>Actual DOM</h1>
           </div>
-
-          <div class="mode-switch" aria-label="Diff mode switch">
-            <span class="mode-switch__label">Diff Mode</span>
-            <div class="mode-switch__buttons">
-              <button class="mode-button is-active" data-diff-mode="auto" type="button">Auto (Keyed)</button>
-              <button class="mode-button" data-diff-mode="index" type="button">Index Only</button>
-            </div>
-          </div>
+          <p id="actual-status" class="panel__status">선택한 테스트 케이스를 적용하면 Actual DOM이 갱신됩니다.</p>
         </div>
 
-        <div class="toolbar__meta">
-          <span id="history-status" class="status-chip">History 1 / 1</span>
-          <span id="diff-mode-status" class="status-chip status-chip--soft">Mode Auto (Keyed)</span>
-          <span id="patch-count" class="status-chip status-chip--soft">Shown Patches 0</span>
-          <span id="patch-status" class="status-text">Initial state is being prepared.</span>
-        </div>
-      </section>
-
-      <section class="workspace">
-        <article class="panel">
-          <div class="panel__header">
-            <div>
-              <p class="panel__eyebrow">Actual DOM</p>
-              <h2>Patch Target</h2>
-            </div>
-            <p class="panel__description">Only the diff result is applied here.</p>
-          </div>
-
-          <div id="actual-root" class="canvas">
-            <section class="demo-card" data-version="v3">
-              <header class="demo-card__header">
-                <p class="badge">Week 4</p>
-                <h3>Keyed List Demo</h3>
-              </header>
-
-              <p class="demo-card__body">
-                The list below uses <code>data-key</code>, so moving items can preserve
-                identity when Auto diff mode is enabled.
-              </p>
-
-              <ul class="feature-list">
-                <li data-key="dom">
-                  <span class="feature-list__label">DOM</span>
-                  <strong>DOM to VDOM conversion</strong>
-                </li>
-                <li data-key="diff">
-                  <span class="feature-list__label">DIFF</span>
-                  <strong>Keyed reconciliation</strong>
-                </li>
-                <li data-key="patch">
-                  <span class="feature-list__label">PATCH</span>
-                  <strong>Selective DOM update</strong>
-                </li>
-              </ul>
-
-              <div class="fact-grid">
-                <article class="fact-card" data-key="reflow">
-                  <h4>Reflow</h4>
-                  <p>Layout recalculation cost.</p>
-                </article>
-                <article class="fact-card" data-key="repaint">
-                  <h4>Repaint</h4>
-                  <p>Visual redraw cost.</p>
-                </article>
-                <article class="fact-card" data-key="history">
-                  <h4>History</h4>
-                  <p>Undo and Redo restore snapshots.</p>
-                </article>
-              </div>
-
-              <p class="demo-card__note">
-                Try reordering the keyed list, changing a sentence, or inserting a new
-                paragraph below this note.
-              </p>
-            </section>
-          </div>
-        </article>
-
-        <article class="panel">
-          <div class="panel__header">
-            <div>
-              <p class="panel__eyebrow">Test DOM</p>
-              <h2>Rendered VDOM Editor</h2>
-            </div>
-            <p class="panel__description">Edit the rendered preview directly and inspect the live diff.</p>
-          </div>
-
-          <p id="editor-status" class="editor__status">
-            Edit the rendered preview directly. Existing keys stay in the virtual tree.
+        <div id="actual-root" class="canvas">
+          <h2 class="doc-block doc-block--heading" data-key="intro-heading">가상 DOM / Diff / Patch</h2>
+          <p class="doc-block doc-block--paragraph" data-key="intro-copy">
+            이 영역은 실제 DOM 대상입니다. 오른쪽 테스트 영역에서는 먼저 미리보기 Virtual DOM을 만든 뒤,
+            Patch로 변경된 부분만 적용합니다.
           </p>
-
-          <div class="editor-tools" aria-label="Rendered editor tools">
-            <div class="editor-tools__group">
-              <button class="editor-tool" data-editor-action="insert-paragraph" type="button">+ Text</button>
-              <button class="editor-tool" data-editor-action="insert-heading" type="button">+ Heading</button>
-              <button class="editor-tool" data-editor-action="insert-list" type="button">+ Bullet</button>
-              <button class="editor-tool" data-editor-action="insert-keyed-item" type="button">+ Keyed Item</button>
-              <button class="editor-tool" data-editor-action="fill-list" type="button">Fill List</button>
-            </div>
-            <div class="editor-tools__group">
-              <button class="editor-tool" data-editor-action="assign-key" type="button">Key</button>
-              <button class="editor-tool" data-editor-action="toggle-prop" type="button">Prop</button>
-              <button class="editor-tool" data-editor-action="duplicate-block" type="button">Duplicate</button>
-              <button class="editor-tool" data-editor-action="delete-block" type="button">Delete</button>
-            </div>
-            <span id="editor-selection" class="status-chip status-chip--soft">Selected: none</span>
-          </div>
-
-          <p class="canvas__hint">
-            Tip: select a block, use the mini toolbar like a Notion block editor,
-            then compare Auto vs <code>Index Only</code>.
-          </p>
-          <div
-            id="test-root"
-            class="canvas canvas--preview canvas--editable"
-            contenteditable="true"
-            spellcheck="false"
-            role="textbox"
-            aria-label="Rendered VDOM editor"
-          ></div>
-        </article>
-      </section>
-
-      <section class="insights">
-        <article class="panel panel--compact">
-          <div class="panel__header">
-            <div>
-              <p class="panel__eyebrow">Guide</p>
-              <h2>Demo Flow</h2>
-            </div>
-          </div>
-
-          <ol class="guide-list">
-            <li>Change one text node directly in the preview to show a simple TEXT patch.</li>
-            <li>Delete one keyed list item and check whether the remaining keys stay preserved.</li>
-            <li>Add a new line or paragraph in the preview to show CREATE / REMOVE behavior.</li>
-            <li>Reorder keyed list content and compare Auto vs Index Only mode.</li>
-            <li>Watch the inline badges, patch log, and VDOM tree update together.</li>
-            <li>Use Undo and Redo to prove that history restores both panels.</li>
-          </ol>
-        </article>
-
-        <article class="panel panel--compact">
-          <div class="panel__header">
-            <div>
-              <p class="panel__eyebrow">Inspector</p>
-              <h2>Patch Log</h2>
-            </div>
-          </div>
-
-          <ol id="patch-log" class="patch-log">
-            <li class="patch-log__item patch-log__item--empty">
-              Edit the rendered preview to inspect diff or click Patch to apply it.
-            </li>
-          </ol>
-        </article>
-
-        <article class="panel panel--compact">
-          <div class="panel__header">
-            <div>
-              <p class="panel__eyebrow">Identity</p>
-              <h2>Key Inspector</h2>
-            </div>
-            <p id="key-summary" class="panel__description panel__description--compact"></p>
-          </div>
-
-          <p class="canvas__hint">
-            Existing keyed nodes keep their identity while you edit the rendered preview.
-            New nodes created directly in the editor start without a key unless they come from existing keyed VDOM.
-          </p>
-
-          <ul id="key-report" class="key-report">
-            <li class="key-report__item key-report__item--empty">
-              No key report available yet.
-            </li>
+          <ul class="doc-block doc-block--list" data-key="core-list">
+            <li data-key="dom">브라우저 DOM을 Virtual DOM 트리로 읽기</li>
+            <li data-key="diff">이전 / 다음 Virtual DOM 비교</li>
+            <li data-key="patch">변경된 실제 DOM만 패치 적용</li>
           </ul>
-        </article>
-      </section>
+          <blockquote class="doc-block doc-block--callout" data-key="key-callout">
+            안정적인 key는 리스트 항목이 추가, 삭제, 재정렬되어도 identity를 유지합니다.
+          </blockquote>
+        </div>
 
-      <section class="visualizer">
-        <article class="panel panel--compact">
-          <div class="panel__header">
-            <div>
-              <p class="panel__eyebrow">Tree View</p>
-              <h2>Actual VDOM</h2>
-            </div>
-            <p id="actual-vdom-summary" class="panel__description panel__description--compact"></p>
+        <div class="change-panel">
+          <div class="change-panel__header">
+            <p class="panel__eyebrow">적용된 변경</p>
+            <h2>Actual 변경 피드</h2>
           </div>
+          <ul id="actual-changes" class="change-list">
+            <li class="change-list__item change-list__item--empty">아직 적용된 패치가 없습니다. Actual DOM은 변경되지 않았습니다.</li>
+          </ul>
+        </div>
+      </article>
 
-          <pre id="actual-vdom-tree" class="tree-view"></pre>
-        </article>
-
-        <article class="panel panel--compact">
-          <div class="panel__header">
-            <div>
-              <p class="panel__eyebrow">Tree View</p>
-              <h2>Test VDOM</h2>
-            </div>
-            <p id="preview-vdom-summary" class="panel__description panel__description--compact"></p>
+      <article class="panel">
+        <div class="panel__header">
+          <div>
+            <p class="panel__eyebrow">테스트 영역</p>
+            <h1>Test DOM</h1>
           </div>
+          <p id="test-status" class="panel__status">오른쪽에서 diff 케이스를 하나 선택하면 Test VDOM이 만들어집니다.</p>
+        </div>
 
-          <pre id="preview-vdom-tree" class="tree-view"></pre>
-        </article>
-      </section>
+        <div class="scenario-grid">
+          <button class="scenario-button" data-scenario-id="text" type="button">1. 텍스트</button>
+          <button class="scenario-button" data-scenario-id="props" type="button">2. 속성</button>
+          <button class="scenario-button" data-scenario-id="create" type="button">3. 생성</button>
+          <button class="scenario-button" data-scenario-id="remove" type="button">4. 삭제</button>
+          <button class="scenario-button" data-scenario-id="replace" type="button">5. 교체</button>
+        </div>
+
+        <div class="scenario-card">
+          <p class="panel__eyebrow">선택된 케이스</p>
+          <h2 id="scenario-title">Diff 케이스를 선택하세요</h2>
+          <p id="scenario-description" class="scenario-card__description">
+            오른쪽에서 diff 케이스를 하나 선택하면 Test VDOM이 만들어집니다.
+          </p>
+          <p id="scenario-expected" class="scenario-card__expected">예상 패치 타입: 없음</p>
+        </div>
+
+        <div class="test-toolbar">
+          <button id="patch-button" class="button button--primary" type="button">Actual에 반영</button>
+          <button id="reset-button" class="button" type="button">초기화</button>
+          <button id="undo-button" class="button" type="button">되돌리기</button>
+          <button id="redo-button" class="button" type="button">다시하기</button>
+        </div>
+
+        <div id="test-root" class="canvas"></div>
+
+        <div class="change-panel">
+          <div class="change-panel__header">
+            <p class="panel__eyebrow">미리보기 변경</p>
+            <h2>Pending 변경 목록</h2>
+          </div>
+          <ul id="test-changes" class="change-list">
+            <li class="change-list__item change-list__item--empty">Test DOM과 Actual DOM이 현재 동일합니다.</li>
+          </ul>
+        </div>
+      </article>
     </main>
 
     <script type="module" src="./src/app.js"></script>
