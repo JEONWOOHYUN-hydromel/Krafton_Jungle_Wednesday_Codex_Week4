@@ -123,12 +123,39 @@ function diffChildren(oldChildren, newChildren, parentPath, patches, options) {
 function diffKeyedChildren(oldChildren, newChildren, parentPath, patches, options) {
   const oldKeys = oldChildren.map(getVNodeKey);
   const newKeys = newChildren.map(getVNodeKey);
+  const oldKeySet = new Set(oldKeys);
+  const newKeySet = new Set(newKeys);
+  const sharedOldKeys = oldKeys.filter((key) => newKeySet.has(key));
+  const sharedNewKeys = newKeys.filter((key) => oldKeySet.has(key));
 
-  if (hasKeyOrderChanged(oldKeys, newKeys)) {
+  if (hasKeyOrderChanged(sharedOldKeys, sharedNewKeys)) {
     patches.push({
       type: PATCH_TYPES.REORDER,
       path: parentPath,
       children: newChildren,
+    });
+  } else {
+    oldChildren.forEach((oldChild, index) => {
+      const key = getVNodeKey(oldChild);
+
+      if (!newKeySet.has(key)) {
+        patches.push({
+          type: PATCH_TYPES.REMOVE,
+          path: [...parentPath, index],
+        });
+      }
+    });
+
+    newChildren.forEach((newChild, index) => {
+      const key = getVNodeKey(newChild);
+
+      if (!oldKeySet.has(key)) {
+        patches.push({
+          type: PATCH_TYPES.CREATE,
+          path: [...parentPath, index],
+          node: newChild,
+        });
+      }
     });
   }
 

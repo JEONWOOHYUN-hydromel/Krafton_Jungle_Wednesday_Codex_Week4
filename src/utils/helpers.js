@@ -241,6 +241,7 @@ export function buildKeyReport(baseVdom, previewVdom) {
   const previewEntries = collectKeyEntries(previewVdom);
   const baseMap = new Map(baseEntries.map((entry) => [entry.id, entry]));
   const previewMap = new Map(previewEntries.map((entry) => [entry.id, entry]));
+  const movedIds = collectMovedKeyIds(baseEntries, previewEntries);
   const previewStatusById = new Map();
   const preserved = [];
   const moved = [];
@@ -256,7 +257,7 @@ export function buildKeyReport(baseVdom, previewVdom) {
       return;
     }
 
-    if (previous.pathLabel !== entry.pathLabel) {
+    if (movedIds.has(entry.id)) {
       moved.push({
         ...entry,
         fromPathLabel: previous.pathLabel,
@@ -362,6 +363,50 @@ function collectKeyEntries(vnode, path = [], entries = []) {
   });
 
   return entries;
+}
+
+function collectMovedKeyIds(baseEntries, previewEntries) {
+  const movedIds = new Set();
+  const baseByScope = groupEntriesByScope(baseEntries);
+  const previewByScope = groupEntriesByScope(previewEntries);
+  const scopeLabels = new Set([...baseByScope.keys(), ...previewByScope.keys()]);
+
+  scopeLabels.forEach((scopeLabel) => {
+    const previousEntries = baseByScope.get(scopeLabel) || [];
+    const nextEntries = previewByScope.get(scopeLabel) || [];
+    const previousIds = previousEntries.map((entry) => entry.id);
+    const nextIds = nextEntries.map((entry) => entry.id);
+    const nextIdSet = new Set(nextIds);
+    const previousIdSet = new Set(previousIds);
+    const sharedPreviousIds = previousIds.filter((id) => nextIdSet.has(id));
+    const sharedNextIds = nextIds.filter((id) => previousIdSet.has(id));
+
+    if (sharedPreviousIds.length !== sharedNextIds.length) {
+      return;
+    }
+
+    const previousPositionById = new Map(sharedPreviousIds.map((id, index) => [id, index]));
+    const nextPositionById = new Map(sharedNextIds.map((id, index) => [id, index]));
+
+    sharedNextIds.forEach((id) => {
+      if (previousPositionById.get(id) !== nextPositionById.get(id)) {
+        movedIds.add(id);
+      }
+    });
+  });
+
+  return movedIds;
+}
+
+function groupEntriesByScope(entries) {
+  return entries.reduce((groups, entry) => {
+    if (!groups.has(entry.scopeLabel)) {
+      groups.set(entry.scopeLabel, []);
+    }
+
+    groups.get(entry.scopeLabel).push(entry);
+    return groups;
+  }, new Map());
 }
 
 function visitVdom(vnode, depth, visitor) {
