@@ -1,0 +1,7 @@
+{
+  "name": "virtual-dom-playground",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Vanilla JS Virtual DOM, Diff, Patch playground"
+}
