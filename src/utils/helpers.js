@@ -153,6 +153,26 @@ export function rootToHtml(rootVNode) {
   return vdomToHtml(rootVNode);
 }
 
+export function stringifyEditableVdom(vnode) {
+  return JSON.stringify(toEditorFriendlyVdom(vnode), null, 2);
+}
+
+export function normalizeEditableVdom(input) {
+  if (Array.isArray(input)) {
+    return createRootVNode(input.map((child) => normalizeEditableNode(child)));
+  }
+
+  if (!input || typeof input !== "object") {
+    throw new Error("VDOM editor expects a JSON object or array.");
+  }
+
+  if (input.type === ROOT_NODE) {
+    return createRootVNode(normalizeChildren(input.children));
+  }
+
+  return createRootVNode([normalizeEditableNode(input)]);
+}
+
 export function formatPath(path = []) {
   if (path.length === 0) {
     return "root";
@@ -363,6 +383,122 @@ function collectKeyEntries(vnode, path = [], entries = []) {
   });
 
   return entries;
+}
+
+function normalizeEditableNode(node) {
+  if (!node || typeof node !== "object") {
+    throw new Error("Each VDOM node must be an object.");
+  }
+
+  if (node.type === TEXT_NODE) {
+    return createTextVNode(node.value ?? "");
+  }
+
+  if (node.type === ROOT_NODE) {
+    return createRootVNode(normalizeChildren(node.children));
+  }
+
+  if (typeof node.tagName !== "string" || node.tagName.trim() === "") {
+    throw new Error("Element nodes require a non-empty tagName.");
+  }
+
+  const props = normalizeProps(node.props);
+  const key = getNormalizedKey({
+    key: node.key ?? props.key ?? null,
+    "data-key": props["data-key"] ?? null,
+  });
+
+  delete props.key;
+
+  if (key !== null) {
+    props["data-key"] = key;
+  } else {
+    delete props["data-key"];
+  }
+
+  return {
+    type: "ELEMENT",
+    tagName: node.tagName.toLowerCase(),
+    props,
+    children: normalizeChildren(node.children),
+    key,
+  };
+}
+
+function normalizeChildren(children) {
+  if (children === undefined || children === null) {
+    return [];
+  }
+
+  if (!Array.isArray(children)) {
+    throw new Error("children must be an array.");
+  }
+
+  return children.map((child) => normalizeEditableNode(child));
+}
+
+function normalizeProps(props) {
+  if (props === undefined || props === null) {
+    return {};
+  }
+
+  if (typeof props !== "object" || Array.isArray(props)) {
+    throw new Error("props must be a plain object.");
+  }
+
+  return Object.entries(props).reduce((normalized, [name, value]) => {
+    if (value === null || value === undefined) {
+      return normalized;
+    }
+
+    normalized[name] = String(value);
+    return normalized;
+  }, {});
+}
+
+function toEditorFriendlyVdom(vnode) {
+  if (!vnode) {
+    return null;
+  }
+
+  if (vnode.type === ROOT_NODE) {
+    return {
+      type: ROOT_NODE,
+      children: (vnode.children || []).map((child) => toEditorFriendlyVdom(child)),
+    };
+  }
+
+  if (vnode.type === TEXT_NODE) {
+    return {
+      type: TEXT_NODE,
+      value: vnode.value ?? "",
+    };
+  }
+
+  const key = getVNodeKey(vnode);
+  const props = { ...(vnode.props || {}) };
+
+  if (key !== null && props["data-key"] === key) {
+    delete props["data-key"];
+  }
+
+  delete props.key;
+
+  const editorNode = {
+    type: "ELEMENT",
+    tagName: vnode.tagName,
+    children: (vnode.children || []).map((child) => toEditorFriendlyVdom(child)),
+  };
+
+  if (key !== null) {
+    editorNode.key = key;
+  }
+
+  if (!isEmptyObject(props)) {
+    editorNode.props = props;
+  }
+
+  return editorNode;
 }
 
 function collectMovedKeyIds(baseEntries, previewEntries) {

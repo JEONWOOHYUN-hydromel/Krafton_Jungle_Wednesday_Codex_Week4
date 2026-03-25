@@ -12,9 +12,9 @@
         <p class="hero__eyebrow">Vanilla JavaScript Demo</p>
         <h1>Virtual DOM / Diff / Patch Visualizer</h1>
         <p class="hero__body">
-          Convert the live DOM into a Virtual DOM tree, compare previous and next VDOM,
-          and patch only the changed parts. Switch diff mode to compare keyed
-          reconciliation against index-based comparison.
+          Convert the live DOM into a Virtual DOM tree, edit that VDOM directly,
+          compare previous and next trees, and patch only the changed parts.
+          Switch diff mode to compare keyed reconciliation against index-based comparison.
         </p>
       </header>
 
@@ -107,24 +107,28 @@
           <div class="panel__header">
             <div>
               <p class="panel__eyebrow">Test DOM</p>
-              <h2>Editable Preview</h2>
+              <h2>VDOM Editor</h2>
             </div>
-            <p class="panel__description">Edit HTML freely and inspect the live diff.</p>
+            <p class="panel__description">Edit VDOM JSON directly and inspect the live diff.</p>
           </div>
 
           <label class="editor">
-            <span class="editor__label">HTML Editor</span>
+            <span class="editor__label">VDOM JSON Editor</span>
             <textarea
               id="test-editor"
               class="editor__input"
               spellcheck="false"
-              aria-label="Editable HTML source"
+              aria-label="Editable VDOM JSON source"
             ></textarea>
           </label>
 
+          <p id="editor-status" class="editor__status">
+            Edit the preview VDOM JSON directly. Keys stay in the virtual tree.
+          </p>
+
           <p class="canvas__hint">
-            Tip: reorder <code>li[data-key]</code> items, switch to <code>Index Only</code>,
-            then compare the patch log and VDOM tree.
+            Tip: edit <code>"key"</code>, <code>"props"</code>, or <code>"children"</code>,
+            switch to <code>Index Only</code>, then compare the patch log and VDOM tree.
           </p>
           <div id="test-root" class="canvas canvas--preview"></div>
         </article>
@@ -140,11 +144,11 @@
           </div>
 
           <ol class="guide-list">
-            <li>Change one sentence to show a simple TEXT patch.</li>
-            <li>Update <code>data-version</code> to show a PROPS patch.</li>
-            <li>Reorder the keyed list and compare Auto vs Index Only mode.</li>
-            <li>Add a new keyed list item and inspect the REORDER patch.</li>
-            <li>Add a new paragraph at the bottom to show plain CREATE / REMOVE.</li>
+            <li>Change one <code>TEXT</code> node value to show a simple TEXT patch.</li>
+            <li>Update one prop in <code>"props"</code> to show a PROPS patch.</li>
+            <li>Reorder keyed list children inside <code>"children"</code> and compare Auto vs Index Only mode.</li>
+            <li>Add a new keyed node by inserting a child object with <code>"key"</code>.</li>
+            <li>Delete one child node to show plain CREATE / REMOVE behavior.</li>
             <li>Use Undo and Redo to prove that history restores both panels.</li>
           </ol>
         </article>
@@ -174,8 +178,8 @@
           </div>
 
           <p class="canvas__hint">
-            If you edit a key value directly, the old key will show as removed and the new key
-            will show as added. Reordering keeps the key but changes its position.
+            If you edit a <code>"key"</code> value directly, the old key will show as removed
+            and the new key will show as added. Reordering keeps the key but changes its position.
           </p>
 
           <ul id="key-report" class="key-report">

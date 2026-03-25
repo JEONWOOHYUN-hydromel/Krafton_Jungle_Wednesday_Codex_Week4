@@ -1,6 +1,6 @@
 # Virtual DOM Playground
 
-Vanilla JavaScript project that demonstrates:
+Vanilla JavaScript project for demonstrating:
 
 - DOM to Virtual DOM conversion
 - Virtual DOM rendering
@@ -8,7 +8,7 @@ Vanilla JavaScript project that demonstrates:
 - Patch application
 - Undo / Redo history
 - Keyed vs index-based diff comparison
-- VDOM tree visualization
+- Inline diff visualization on the rendered DOM
 
 ## Folder Structure
 
@@ -32,22 +32,37 @@ project-root/
 └── README.md
 ```
 
+## Main Idea
+
+This demo now uses the Virtual DOM itself as the editable source.
+
+Flow:
+
+1. Read the sample DOM from the Actual area.
+2. Convert it to an initial VDOM.
+3. Show that VDOM as editable JSON.
+4. Render the edited VDOM into the Test area.
+5. Diff `actualVdom` and `previewVdom`.
+6. Apply only the patches to the Actual DOM.
+
+Because the source is now VDOM JSON, keys stay in the virtual tree and are easier to preserve than when editing raw HTML.
+
 ## Main Modules
 
 - `src/vdom/domToVdom.js`
-  - Converts DOM or HTML strings into a VDOM tree.
+  - Converts real DOM into VDOM.
 - `src/vdom/renderVdom.js`
-  - Renders a VDOM tree back into real DOM nodes.
+  - Renders VDOM into real DOM.
+  - Mirrors `key` into `data-key` when needed so keyed patching can reuse DOM nodes.
 - `src/diff/diff.js`
   - Builds patch lists from old and new VDOM.
-  - Supports `Auto (Keyed)` and `Index Only` modes.
+  - Supports `Auto (Keyed)` and `Index Only`.
 - `src/patch/patch.js`
   - Applies patches to the real DOM.
-  - Returns changed elements so the UI can highlight them.
-- `src/app.js`
-  - Connects the full demo flow, history, patch log, diff mode toggle, and VDOM tree panels.
 - `src/utils/helpers.js`
-  - Shared helpers for keys, patch descriptions, VDOM stats, and tree formatting.
+  - Key helpers, patch descriptions, VDOM formatting, and VDOM JSON normalization.
+- `src/app.js`
+  - Connects editor input, preview rendering, patching, history, key inspector, and visualization.
 
 ## Supported Patch Types
 
@@ -62,64 +77,128 @@ project-root/
 
 ### Auto (Keyed)
 
-If all sibling nodes in the same list have `key` or `data-key`, the diff uses key-based comparison.
+If sibling nodes have stable keys, diff compares them by identity first.
 
-Example:
+Example VDOM child:
 
-```html
-<ul>
-  <li data-key="dom">DOM to VDOM</li>
-  <li data-key="diff">Keyed reconciliation</li>
-  <li data-key="patch">Selective DOM update</li>
-</ul>
+```json
+{
+  "type": "ELEMENT",
+  "tagName": "li",
+  "key": "patch",
+  "children": [
+    {
+      "type": "TEXT",
+      "value": "Selective DOM update"
+    }
+  ]
+}
 ```
-
-Reordering those items produces a `REORDER` patch instead of replacing every item.
 
 ### Index Only
 
-Disables keyed comparison and compares siblings only by index.  
-This is useful for demonstrating why React-style keyed reconciliation matters.
+Ignores keyed reconciliation and compares siblings only by position.
+
+This is useful for showing why React-style keyed diff exists.
 
 ## UI Features
 
-- Two live areas:
-  - Actual DOM
-  - Test DOM
-- HTML editor for direct manual changes
-- `Patch`, `Undo`, `Redo`
-- Diff mode toggle:
-  - `Auto (Keyed)`
-  - `Index Only`
-- Patch log panel
-- Key Inspector panel
-- Actual VDOM tree panel
-- Test VDOM tree panel
-- Changed node highlight animation after patch
+- Actual DOM area
+- Test DOM preview area
+- VDOM JSON editor
+- Patch log
+- Key inspector
+- Actual / Test VDOM tree panels
+- Diff mode toggle
+- Undo / Redo history
+- Inline diff color cues and badges
 
-## How It Works
+## How To Edit
 
-1. On page load, the sample DOM inside the Actual DOM area is converted into Virtual DOM.
-2. The same VDOM is rendered into the Test DOM preview and HTML editor.
-3. While editing HTML:
-   - the Test DOM preview updates
-   - the patch log updates
-   - the Test VDOM tree updates
-4. When `Patch` is clicked:
-   - current editor HTML becomes the next VDOM
-   - diff is generated against the current Actual VDOM
-   - only the patches are applied to the Actual DOM
-   - changed nodes are highlighted
-   - the new VDOM is stored in history
-5. `Undo` and `Redo` restore both Actual DOM and Test DOM from saved VDOM snapshots.
+The editor expects VDOM JSON.
+
+- Root node:
+
+```json
+{
+  "type": "ROOT",
+  "children": []
+}
+```
+
+- Text node:
+
+```json
+{
+  "type": "TEXT",
+  "value": "Hello"
+}
+```
+
+- Element node:
+
+```json
+{
+  "type": "ELEMENT",
+  "tagName": "li",
+  "key": "item-2",
+  "props": {
+    "class": "feature-item"
+  },
+  "children": [
+    {
+      "type": "TEXT",
+      "value": "Second item"
+    }
+  ]
+}
+```
+
+Notes:
+
+- `key` is edited directly in VDOM JSON.
+- Internally the renderer mirrors that key to `data-key` for DOM reuse.
+- If the JSON is invalid, preview stays on the last valid VDOM and `Patch` is disabled.
+
+## Recommended Demo Flow
+
+1. Show the initial VDOM JSON editor and the two DOM panels.
+2. Change one text node value.
+   - Show a `TEXT` patch.
+3. Change one prop value in `props`.
+   - Show a `PROPS` patch.
+4. Add a new keyed child object at the top of a keyed list.
+   - Show `CREATE`.
+   - Show that existing keyed nodes remain preserved.
+5. Remove the first keyed child.
+   - Show `REMOVE`.
+   - Show that the remaining keyed nodes keep identity.
+6. Reorder two existing keyed children.
+   - In `Auto (Keyed)`, show `REORDER`.
+   - In `Index Only`, show heavier replacement behavior.
+7. Use Undo / Redo.
+   - Confirm that both DOM panels and the editor move through the same history.
+
+## Good Talking Points
+
+- Real DOM updates are expensive because they can trigger reflow and repaint.
+- Virtual DOM lets us compare changes in memory first.
+- Keys preserve node identity across insert, remove, and reorder operations.
+- React follows the same broad idea:
+  - build the next virtual tree
+  - reconcile old vs new
+  - touch the real DOM only where needed
+
+## Current Limits
+
+- This is not React Fiber.
+- No scheduler or concurrent rendering.
+- Mixed keyed and unkeyed siblings still fall back to simpler behavior.
+- The VDOM editor is JSON-based, not a full tree UI.
 
 ## Run
 
-### Open directly
-
-Open `index.html` in a browser.
-
-### Or run a local static server
+Open `index.html` directly in a browser, or run a static server:
 
 ```bash
 python -m http.server 5500
@@ -130,59 +209,3 @@ Then open:
 ```text
 http://127.0.0.1:5500
 ```
-
-## Recommended Demo Flow
-
-This order works well for a presentation or assignment demo.
-
-1. Show the layout
-   - Left: Actual DOM
-   - Right: editable Test DOM
-   - Bottom: patch log and VDOM tree panels
-2. Change one sentence
-   - Show a simple `TEXT` patch.
-   - Point out the highlighted changed node.
-3. Change one attribute
-   - Example: `data-version="v3"` to `data-version="v4"`
-   - Show a `PROPS` patch.
-4. Reorder the keyed list in `Auto (Keyed)` mode
-   - Move the `li[data-key="patch"]` item to the top.
-   - Show that the patch log produces `REORDER`.
-   - Show that the Test VDOM tree order changed.
-5. Switch to `Index Only`
-   - Keep the same reordered HTML.
-   - Show that the patch log changes from `REORDER` to multiple `REPLACE` patches.
-   - This is the clearest visual explanation of why keys matter.
-   - Also point out that the Key Inspector still shows the key itself was preserved; only the diff strategy changed.
-6. Add or remove a keyed item
-   - Example: add `<li data-key="extra">Extra node</li>`
-   - Show how the preview badge changes to `added` and the Key Inspector reports added/removed keys.
-7. Add a plain paragraph at the bottom
-   - Show a regular `CREATE` patch.
-   - Delete it again to show `REMOVE`.
-8. Use `Undo` and `Redo`
-   - Confirm that both DOM panels and the editor move through state history together.
-
-## Good Talking Points
-
-- Real DOM updates are expensive because they can trigger reflow and repaint.
-- Virtual DOM allows comparison in memory before touching the real DOM.
-- Keys matter because they preserve node identity during reorder operations.
-- React uses the same broad idea:
-  - create the next virtual tree
-  - reconcile differences
-  - minimize real DOM work
-
-## Current Limits
-
-- This is not React Fiber.
-- No scheduler or concurrent rendering.
-- Mixed keyed and unkeyed siblings still fall back to simpler behavior.
-- It is a learning/demo implementation, not a production renderer.
-
-## Next Ideas
-
-- Store patch logs per history entry
-- Add a benchmark mode with long lists
-- Add MutationObserver experiments
-- Add a side-by-side "full rerender vs patch" performance comparison

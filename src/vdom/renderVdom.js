@@ -1,4 +1,4 @@
-import { ROOT_NODE, TEXT_NODE } from "../utils/helpers.js";
+import { ROOT_NODE, TEXT_NODE, getNormalizedKey } from "../utils/helpers.js";
 
 export function renderVdom(vnode) {
   if (!vnode) {
@@ -18,8 +18,17 @@ export function renderVdom(vnode) {
   }
 
   const element = document.createElement(vnode.tagName);
+  const attrs = { ...(vnode.props || {}) };
+  const key = getNormalizedKey({
+    key: vnode.key ?? attrs.key ?? null,
+    "data-key": attrs["data-key"] ?? null,
+  });
 
-  Object.entries(vnode.props || {}).forEach(([name, value]) => {
+  if (key !== null && attrs["data-key"] === undefined) {
+    attrs["data-key"] = key;
+  }
+
+  Object.entries(attrs).forEach(([name, value]) => {
     element.setAttribute(name, value);
   });
 
