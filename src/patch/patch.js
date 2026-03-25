@@ -1,5 +1,6 @@
-import { renderVdom } from "../vdom/renderVdom.js";
 import { PATCH_TYPES } from "../diff/diff.js";
+import { getDomNodeKey, getVNodeKey, isKeySegment } from "../utils/helpers.js";
+import { renderVdom } from "../vdom/renderVdom.js";
 
 export function applyPatches(rootElement, patches = []) {
   const orderedPatches = sortPatches(patches);
@@ -24,6 +25,9 @@ function applyPatch(rootElement, patch) {
       break;
     case PATCH_TYPES.CREATE:
       createNode(rootElement, patch);
+      break;
+    case PATCH_TYPES.REORDER:
+      reorderChildren(rootElement, patch);
       break;
     default:
       break;
@@ -74,7 +78,7 @@ function createNode(rootElement, patch) {
   const insertIndex = patch.path.at(-1);
   const parent = getNodeByPath(rootElement, parentPath);
 
-  if (!parent) {
+  if (!parent || typeof insertIndex !== "number") {
     return;
   }
 
@@ -82,8 +86,51 @@ function createNode(rootElement, patch) {
   parent.insertBefore(renderVdom(patch.node), referenceNode);
 }
 
+function reorderChildren(rootElement, patch) {
+  const parent = getNodeByPath(rootElement, patch.path);
+
+  if (!parent) {
+    return;
+  }
+
+  const existingChildrenByKey = new Map();
+
+  Array.from(parent.childNodes).forEach((childNode) => {
+    const key = getDomNodeKey(childNode);
+    if (key !== null) {
+      existingChildrenByKey.set(key, childNode);
+    }
+  });
+
+  const nextChildNodes = (patch.children || []).map((childVNode) => {
+    const key = getVNodeKey(childVNode);
+
+    if (key !== null && existingChildrenByKey.has(key)) {
+      return existingChildrenByKey.get(key);
+    }
+
+    return renderVdom(childVNode);
+  });
+
+  parent.replaceChildren(...nextChildNodes);
+}
+
 function getNodeByPath(rootElement, path = []) {
-  return path.reduce((currentNode, childIndex) => currentNode?.childNodes?.[childIndex] ?? null, rootElement);
+  return path.reduce((currentNode, segment) => {
+    if (!currentNode) {
+      return null;
+    }
+
+    if (isKeySegment(segment)) {
+      return findChildByKey(currentNode, segment.value);
+    }
+
+    return currentNode.childNodes?.[segment] ?? null;
+  }, rootElement);
+}
+
+function findChildByKey(parentNode, key) {
+  return Array.from(parentNode.childNodes).find((childNode) => getDomNodeKey(childNode) === String(key)) ?? null;
 }
 
 function sortPatches(patches) {
@@ -116,15 +163,38 @@ function comparePath(left = [], right = []) {
   const maxLength = Math.max(left.length, right.length);
 
   for (let index = 0; index < maxLength; index += 1) {
-    const leftValue = left[index] ?? -1;
-    const rightValue = right[index] ?? -1;
+    const result = compareSegment(left[index], right[index]);
 
-    if (leftValue !== rightValue) {
-      return leftValue - rightValue;
+    if (result !== 0) {
+      return result;
     }
   }
 
   return left.length - right.length;
 }
 
-// TODO: replace / remove / create 이후 focus 유지 같은 세밀한 UX 처리는 이 파일에서 개선합니다.
+function compareSegment(left, right) {
+  if (left === undefined) {
+    return -1;
+  }
+
+  if (right === undefined) {
+    return 1;
+  }
+
+  if (isKeySegment(left) && isKeySegment(right)) {
+    return String(left.value).localeCompare(String(right.value));
+  }
+
+  if (isKeySegment(left)) {
+    return 1;
+  }
+
+  if (isKeySegment(right)) {
+    return -1;
+  }
+
+  return left - right;
+}
+
+// TODO: focus 유지나 selection 복원까지 필요해지면 patch 단계에서 UI 상태 보존 로직을 추가합니다.

@@ -1,4 +1,11 @@
-import { ROOT_NODE, TEXT_NODE, diffProps, isEmptyObject } from "../utils/helpers.js";
+import {
+  ROOT_NODE,
+  TEXT_NODE,
+  createKeySegment,
+  diffProps,
+  getVNodeKey,
+  isEmptyObject,
+} from "../utils/helpers.js";
 
 export const PATCH_TYPES = {
   CREATE: "CREATE",
@@ -6,6 +13,7 @@ export const PATCH_TYPES = {
   REPLACE: "REPLACE",
   TEXT: "TEXT",
   PROPS: "PROPS",
+  REORDER: "REORDER",
 };
 
 export function diff(oldVNode, newVNode) {
@@ -36,18 +44,6 @@ function walk(oldVNode, newVNode, path, patches) {
     return;
   }
 
-  if (oldVNode.type === ROOT_NODE || newVNode.type === ROOT_NODE) {
-    const oldChildren = oldVNode.children || [];
-    const newChildren = newVNode.children || [];
-    const maxLength = Math.max(oldChildren.length, newChildren.length);
-
-    for (let index = 0; index < maxLength; index += 1) {
-      walk(oldChildren[index], newChildren[index], [...path, index], patches);
-    }
-
-    return;
-  }
-
   if (oldVNode.type !== newVNode.type) {
     patches.push({
       type: PATCH_TYPES.REPLACE,
@@ -69,7 +65,7 @@ function walk(oldVNode, newVNode, path, patches) {
     return;
   }
 
-  if (oldVNode.tagName !== newVNode.tagName) {
+  if (oldVNode.type !== ROOT_NODE && oldVNode.tagName !== newVNode.tagName) {
     patches.push({
       type: PATCH_TYPES.REPLACE,
       path,
@@ -78,22 +74,105 @@ function walk(oldVNode, newVNode, path, patches) {
     return;
   }
 
-  const propChanges = diffProps(oldVNode.props, newVNode.props);
-  if (!isEmptyObject(propChanges)) {
+  if (oldVNode.type !== ROOT_NODE && getVNodeKey(oldVNode) !== getVNodeKey(newVNode)) {
     patches.push({
-      type: PATCH_TYPES.PROPS,
+      type: PATCH_TYPES.REPLACE,
       path,
-      props: propChanges,
+      node: newVNode,
     });
+    return;
   }
 
-  const oldChildren = oldVNode.children || [];
-  const newChildren = newVNode.children || [];
+  if (oldVNode.type !== ROOT_NODE) {
+    const propChanges = diffProps(oldVNode.props, newVNode.props);
+    if (!isEmptyObject(propChanges)) {
+      patches.push({
+        type: PATCH_TYPES.PROPS,
+        path,
+        props: propChanges,
+      });
+    }
+  }
+
+  diffChildren(oldVNode.children || [], newVNode.children || [], path, patches);
+}
+
+function diffChildren(oldChildren, newChildren, parentPath, patches) {
+  if (shouldUseKeyedDiff(oldChildren, newChildren)) {
+    diffKeyedChildren(oldChildren, newChildren, parentPath, patches);
+    return;
+  }
+
   const maxLength = Math.max(oldChildren.length, newChildren.length);
 
   for (let index = 0; index < maxLength; index += 1) {
-    walk(oldChildren[index], newChildren[index], [...path, index], patches);
+    walk(oldChildren[index], newChildren[index], [...parentPath, index], patches);
   }
 }
 
-// TODO: 현재는 index 기반 비교입니다. 추후 key 기반 최소 변경 탐지로 확장할 수 있습니다.
+function diffKeyedChildren(oldChildren, newChildren, parentPath, patches) {
+  const oldKeys = oldChildren.map(getVNodeKey);
+  const newKeys = newChildren.map(getVNodeKey);
+
+  if (hasKeyOrderChanged(oldKeys, newKeys)) {
+    patches.push({
+      type: PATCH_TYPES.REORDER,
+      path: parentPath,
+      children: newChildren,
+    });
+  }
+
+  const oldChildrenByKey = new Map(oldChildren.map((child) => [getVNodeKey(child), child]));
+
+  newChildren.forEach((newChild) => {
+    const key = getVNodeKey(newChild);
+    const oldChild = oldChildrenByKey.get(key);
+
+    if (!oldChild) {
+      return;
+    }
+
+    walk(oldChild, newChild, [...parentPath, createKeySegment(key)], patches);
+  });
+}
+
+function shouldUseKeyedDiff(oldChildren, newChildren) {
+  if (oldChildren.length === 0 && newChildren.length === 0) {
+    return false;
+  }
+
+  return areChildrenKeyedAndUnique(oldChildren) && areChildrenKeyedAndUnique(newChildren);
+}
+
+function areChildrenKeyedAndUnique(children) {
+  const seenKeys = new Set();
+
+  for (const child of children) {
+    if (!child) {
+      return false;
+    }
+
+    if (child.type === TEXT_NODE) {
+      return false;
+    }
+
+    const key = getVNodeKey(child);
+    if (key === null || seenKeys.has(key)) {
+      return false;
+    }
+
+    seenKeys.add(key);
+  }
+
+  return true;
+}
+
+function hasKeyOrderChanged(oldKeys, newKeys) {
+  if (oldKeys.length !== newKeys.length) {
+    return true;
+  }
+
+  return oldKeys.some((key, index) => key !== newKeys[index]);
+}
+
+// TODO: 현재 keyed diff는 형제 전원이 key를 가질 때만 활성화됩니다. mixed children 전략은 추후 확장합니다.
