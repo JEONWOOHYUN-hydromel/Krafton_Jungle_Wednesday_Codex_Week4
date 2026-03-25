@@ -92,6 +92,7 @@ This is useful for demonstrating why React-style keyed reconciliation matters.
   - `Auto (Keyed)`
   - `Index Only`
 - Patch log panel
+- Key Inspector panel
 - Actual VDOM tree panel
 - Test VDOM tree panel
 - Changed node highlight animation after patch
@@ -152,9 +153,10 @@ This order works well for a presentation or assignment demo.
    - Keep the same reordered HTML.
    - Show that the patch log changes from `REORDER` to multiple `REPLACE` patches.
    - This is the clearest visual explanation of why keys matter.
+   - Also point out that the Key Inspector still shows the key itself was preserved; only the diff strategy changed.
 6. Add or remove a keyed item
    - Example: add `<li data-key="extra">Extra node</li>`
-   - Show how keyed list changes are represented.
+   - Show how the preview badge changes to `added` and the Key Inspector reports added/removed keys.
 7. Add a plain paragraph at the bottom
    - Show a regular `CREATE` patch.
    - Delete it again to show `REMOVE`.

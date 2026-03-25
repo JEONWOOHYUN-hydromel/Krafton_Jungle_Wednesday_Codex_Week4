@@ -1,10 +1,13 @@
 import { DIFF_MODES, diff } from "./diff/diff.js";
 import { applyPatches } from "./patch/patch.js";
 import {
+  buildKeyReport,
   cloneVdom,
+  createScopedKeyId,
   describePatch,
   escapeHtml,
   getVdomStats,
+  getVNodeKey,
   rootToHtml,
   summarizePatches,
   vdomToTreeString,
@@ -31,6 +34,8 @@ const elements = {
   patchCount: document.querySelector("#patch-count"),
   patchStatus: document.querySelector("#patch-status"),
   patchLog: document.querySelector("#patch-log"),
+  keySummary: document.querySelector("#key-summary"),
+  keyReport: document.querySelector("#key-report"),
   diffModeButtons: Array.from(document.querySelectorAll("[data-diff-mode]")),
   actualTree: document.querySelector("#actual-vdom-tree"),
   previewTree: document.querySelector("#preview-vdom-tree"),
@@ -47,6 +52,7 @@ const state = {
   diffMode: DIFF_MODES.AUTO,
   statusMessage: "Initial Virtual DOM is ready.",
   highlightTimer: null,
+  keyReport: null,
 };
 
 bootstrap();
@@ -68,8 +74,7 @@ function bootstrap() {
   bindEvents();
   renderModeButtons();
   renderVdomTrees();
-  renderPatchLog(DEFAULT_LOG_MESSAGE);
-  renderToolbarMeta();
+  updatePreviewAnalysis(DEFAULT_LOG_MESSAGE);
 }
 
 function bindEvents() {
@@ -89,7 +94,7 @@ function handleEditorInput() {
   state.previewVdom = cloneVdom(nextVdom);
   mountVdom(elements.testRoot, nextVdom);
   renderVdomTrees();
-  refreshPreviewDiff("The current actual and test VDOM match in this mode.");
+  updatePreviewAnalysis("The current actual and test VDOM match in this mode.");
 }
 
 function handlePatch() {
@@ -97,10 +102,13 @@ function handlePatch() {
   const patches = diff(state.actualVdom, nextVdom, { mode: state.diffMode });
 
   state.previewVdom = cloneVdom(nextVdom);
-  state.lastPatches = patches;
   mountVdom(elements.testRoot, nextVdom);
   renderVdomTrees();
+  state.lastPatches = patches;
+  state.keyReport = buildKeyReport(state.actualVdom, state.previewVdom);
   renderPatchLog("No changes to apply.");
+  renderKeyInspector();
+  decoratePreviewKeys();
 
   if (patches.length === 0) {
     state.statusMessage = "No changes to apply.";
@@ -161,6 +169,7 @@ function applyHistorySnapshot(message) {
   state.actualVdom = cloneVdom(snapshot);
   state.previewVdom = cloneVdom(snapshot);
   state.lastPatches = [];
+  state.keyReport = buildKeyReport(state.actualVdom, state.previewVdom);
   state.statusMessage = message;
 
   mountVdom(elements.actualRoot, snapshot);
@@ -168,8 +177,7 @@ function applyHistorySnapshot(message) {
   syncEditor(snapshot);
   clearPatchedElements();
   renderVdomTrees();
-  renderPatchLog(`${message} Actual and test VDOM are synced again.`);
-  renderToolbarMeta();
+  updatePreviewAnalysis(`${message} Actual and test VDOM are synced again.`);
 }
 
 function pushHistory(vdom) {
@@ -180,9 +188,12 @@ function pushHistory(vdom) {
   state.index = state.history.length - 1;
 }
 
-function refreshPreviewDiff(emptyMessage = DEFAULT_LOG_MESSAGE) {
+function updatePreviewAnalysis(emptyMessage = DEFAULT_LOG_MESSAGE) {
   state.lastPatches = diff(state.actualVdom, state.previewVdom, { mode: state.diffMode });
+  state.keyReport = buildKeyReport(state.actualVdom, state.previewVdom);
   renderPatchLog(emptyMessage);
+  renderKeyInspector();
+  decoratePreviewKeys();
   renderToolbarMeta();
 }
 
@@ -238,6 +249,101 @@ function renderTreePanel(summaryElement, treeElement, vnode) {
 
   summaryElement.textContent = `Nodes ${stats.nodes} | Elements ${stats.elements} | Text ${stats.texts} | Depth ${stats.maxDepth}`;
   treeElement.textContent = vdomToTreeString(vnode);
+}
+
+function renderKeyInspector() {
+  const report = state.keyReport;
+
+  if (!report) {
+    elements.keySummary.textContent = "No key report available yet.";
+    elements.keyReport.innerHTML = `<li class="key-report__item key-report__item--empty">${escapeHtml(DEFAULT_LOG_MESSAGE)}</li>`;
+    return;
+  }
+
+  const summary = report.summary;
+  elements.keySummary.textContent =
+    `Actual ${summary.actualKeys} | Test ${summary.previewKeys} | Preserved ${summary.preserved} | Moved ${summary.moved} | Added ${summary.added} | Removed ${summary.removed}`;
+
+  const groups = [
+    createKeyGroupMarkup("Preserved", "preserved", report.preserved, (entry) => `${entry.key} stays at ${entry.pathLabel}`),
+    createKeyGroupMarkup("Moved", "moved", report.moved, (entry) => `${entry.key} moves ${entry.fromPathLabel} -> ${entry.toPathLabel}`),
+    createKeyGroupMarkup("Added", "added", report.added, (entry) => `${entry.key} appears at ${entry.pathLabel}`),
+    createKeyGroupMarkup("Removed", "removed", report.removed, (entry) => `${entry.key} disappears from ${entry.pathLabel}`),
+  ].filter(Boolean);
+
+  if (groups.length === 0) {
+    elements.keyReport.innerHTML = `<li class="key-report__item key-report__item--empty">No keyed elements found. Add <code>data-key</code> to compare identity.</li>`;
+    return;
+  }
+
+  elements.keyReport.innerHTML = groups.join("");
+}
+
+function createKeyGroupMarkup(label, stateName, entries, formatter) {
+  if (!entries || entries.length === 0) {
+    return "";
+  }
+
+  return `
+    <li class="key-report__group">
+      <div class="key-report__group-header">
+        <strong>${escapeHtml(label)}</strong>
+        <span class="key-report__count">${entries.length}</span>
+      </div>
+      <ul class="key-report__group-list">
+        ${entries
+          .map(
+            (entry) => `
+              <li class="key-report__item key-report__item--${escapeHtml(stateName)}">
+                <span class="key-report__badge">${escapeHtml(entry.tagName)}</span>
+                <span class="key-report__text">${escapeHtml(formatter(entry))}</span>
+              </li>
+            `,
+          )
+          .join("")}
+      </ul>
+    </li>
+  `;
+}
+
+function decoratePreviewKeys() {
+  clearPreviewKeyBadges();
+
+  if (!state.keyReport) {
+    return;
+  }
+
+  const childNodes = Array.from(elements.testRoot.childNodes);
+  (state.previewVdom?.children || []).forEach((childVNode, index) => {
+    walkPreviewDom(childNodes[index], childVNode, [index]);
+  });
+}
+
+function walkPreviewDom(domNode, vnode, path) {
+  if (!domNode || !vnode || vnode.type === "TEXT") {
+    return;
+  }
+
+  const key = getVNodeKey(vnode);
+  if (key !== null && domNode.nodeType === Node.ELEMENT_NODE) {
+    const id = createScopedKeyId(path, key);
+    const status = state.keyReport?.previewStatusById.get(id) ?? "preserved";
+
+    domNode.dataset.keyVisualState = status;
+    domNode.dataset.keyBadge = `key:${key} | ${status}`;
+  }
+
+  const domChildren = Array.from(domNode.childNodes);
+  (vnode.children || []).forEach((childVNode, index) => {
+    walkPreviewDom(domChildren[index], childVNode, [...path, index]);
+  });
+}
+
+function clearPreviewKeyBadges() {
+  elements.testRoot.querySelectorAll("[data-key-visual-state]").forEach((element) => {
+    element.removeAttribute("data-key-visual-state");
+    element.removeAttribute("data-key-badge");
+  });
 }
 
 function flashPatchedElements(targets = []) {

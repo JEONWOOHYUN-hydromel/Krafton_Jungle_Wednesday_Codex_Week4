@@ -164,6 +164,10 @@ export function formatPath(path = []) {
   ].join(" > ");
 }
 
+export function createScopedKeyId(path = [], key = "") {
+  return `${formatPath(path.slice(0, -1))}::${String(key)}`;
+}
+
 export function summarizePatches(patches = []) {
   if (patches.length === 0) {
     return "No changes";
@@ -232,6 +236,63 @@ export function vdomToTreeString(vnode) {
   return lines.join("\n");
 }
 
+export function buildKeyReport(baseVdom, previewVdom) {
+  const baseEntries = collectKeyEntries(baseVdom);
+  const previewEntries = collectKeyEntries(previewVdom);
+  const baseMap = new Map(baseEntries.map((entry) => [entry.id, entry]));
+  const previewMap = new Map(previewEntries.map((entry) => [entry.id, entry]));
+  const previewStatusById = new Map();
+  const preserved = [];
+  const moved = [];
+  const added = [];
+  const removed = [];
+
+  previewEntries.forEach((entry) => {
+    const previous = baseMap.get(entry.id);
+
+    if (!previous) {
+      added.push(entry);
+      previewStatusById.set(entry.id, "added");
+      return;
+    }
+
+    if (previous.pathLabel !== entry.pathLabel) {
+      moved.push({
+        ...entry,
+        fromPathLabel: previous.pathLabel,
+        toPathLabel: entry.pathLabel,
+      });
+      previewStatusById.set(entry.id, "moved");
+      return;
+    }
+
+    preserved.push(entry);
+    previewStatusById.set(entry.id, "preserved");
+  });
+
+  baseEntries.forEach((entry) => {
+    if (!previewMap.has(entry.id)) {
+      removed.push(entry);
+    }
+  });
+
+  return {
+    preserved,
+    moved,
+    added,
+    removed,
+    previewStatusById,
+    summary: {
+      actualKeys: baseEntries.length,
+      previewKeys: previewEntries.length,
+      preserved: preserved.length,
+      moved: moved.length,
+      added: added.length,
+      removed: removed.length,
+    },
+  };
+}
+
 function walkTree(vnode, depth, lines) {
   const indent = "  ".repeat(depth);
 
@@ -267,6 +328,40 @@ function walkTree(vnode, depth, lines) {
   vnode.children.forEach((child) => {
     walkTree(child, depth + 1, lines);
   });
+}
+
+function collectKeyEntries(vnode, path = [], entries = []) {
+  if (!vnode) {
+    return entries;
+  }
+
+  if (vnode.type === ROOT_NODE) {
+    vnode.children.forEach((child, index) => {
+      collectKeyEntries(child, [...path, index], entries);
+    });
+    return entries;
+  }
+
+  if (vnode.type === TEXT_NODE) {
+    return entries;
+  }
+
+  const key = getVNodeKey(vnode);
+  if (key !== null) {
+    entries.push({
+      id: createScopedKeyId(path, key),
+      key,
+      tagName: vnode.tagName,
+      pathLabel: formatPath(path),
+      scopeLabel: formatPath(path.slice(0, -1)),
+    });
+  }
+
+  (vnode.children || []).forEach((child, index) => {
+    collectKeyEntries(child, [...path, index], entries);
+  });
+
+  return entries;
 }
 
 function visitVdom(vnode, depth, visitor) {
