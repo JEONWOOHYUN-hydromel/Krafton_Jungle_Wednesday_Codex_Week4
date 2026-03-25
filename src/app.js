@@ -8,8 +8,6 @@ import {
   escapeHtml,
   formatPath,
   getVdomStats,
-  normalizeEditableVdom,
-  stringifyEditableVdom,
   summarizePatches,
   vdomToTreeString,
 } from "./utils/helpers.js";
@@ -21,14 +19,13 @@ const DIFF_MODE_LABELS = {
   [DIFF_MODES.INDEX]: "Index Only",
 };
 
-const DEFAULT_LOG_MESSAGE = "Edit the VDOM JSON to preview diff or click Patch to apply it.";
-const DEFAULT_EDITOR_HELP = "Edit the preview VDOM JSON directly. Keys stay in the virtual tree.";
+const DEFAULT_LOG_MESSAGE = "Edit the rendered VDOM preview to inspect diff, then click Patch to apply it.";
+const DEFAULT_EDITOR_HELP = "Edit the rendered preview directly. Existing keys stay in the virtual tree.";
 const DIFF_TYPE_PRIORITY = ["REMOVE", "CREATE", "REPLACE", "REORDER", "PROPS", "TEXT"];
 
 const elements = {
   actualRoot: document.querySelector("#actual-root"),
   testRoot: document.querySelector("#test-root"),
-  editor: document.querySelector("#test-editor"),
   editorStatus: document.querySelector("#editor-status"),
   patchButton: document.querySelector("#patch-button"),
   undoButton: document.querySelector("#undo-button"),
@@ -57,7 +54,6 @@ const state = {
   statusMessage: "Initial Virtual DOM is ready.",
   highlightTimer: null,
   keyReport: null,
-  editorError: null,
 };
 
 bootstrap();
@@ -87,7 +83,7 @@ function bindEvents() {
   elements.patchButton.addEventListener("click", handlePatch);
   elements.undoButton.addEventListener("click", handleUndo);
   elements.redoButton.addEventListener("click", handleRedo);
-  elements.editor.addEventListener("input", handleEditorInput);
+  elements.testRoot.addEventListener("input", handleEditorInput);
 
   elements.diffModeButtons.forEach((button) => {
     button.addEventListener("click", handleDiffModeChange);
@@ -95,41 +91,19 @@ function bindEvents() {
 }
 
 function handleEditorInput() {
-  const editorState = readEditorVdom();
+  const nextVdom = readEditorVdom();
 
-  if (!editorState.ok) {
-    state.editorError = editorState.message;
-    state.statusMessage = `Editor error: ${editorState.message}`;
-    renderEditorStatus();
-    renderToolbarMeta();
-    return;
-  }
-
-  state.editorError = null;
-  state.previewVdom = cloneVdom(editorState.vdom);
-  mountVdom(elements.testRoot, editorState.vdom);
+  state.previewVdom = cloneVdom(nextVdom);
   renderVdomTrees();
   updatePreviewAnalysis("The current actual and test VDOM match in this mode.");
   renderEditorStatus();
 }
 
 function handlePatch() {
-  const editorState = readEditorVdom();
-
-  if (!editorState.ok) {
-    state.editorError = editorState.message;
-    state.statusMessage = `Editor error: ${editorState.message}`;
-    renderEditorStatus();
-    renderToolbarMeta();
-    return;
-  }
-
-  state.editorError = null;
-  const nextVdom = editorState.vdom;
+  const nextVdom = readEditorVdom();
   const patches = diff(state.actualVdom, nextVdom, { mode: state.diffMode });
 
   state.previewVdom = cloneVdom(nextVdom);
-  mountVdom(elements.testRoot, nextVdom);
   renderVdomTrees();
   state.lastPatches = patches;
   state.keyReport = buildKeyReport(state.actualVdom, state.previewVdom);
@@ -201,7 +175,6 @@ function applyHistorySnapshot(message) {
   state.lastPatches = [];
   state.keyReport = buildKeyReport(state.actualVdom, state.previewVdom);
   state.statusMessage = message;
-  state.editorError = null;
 
   mountVdom(elements.actualRoot, snapshot);
   mountVdom(elements.testRoot, snapshot);
@@ -231,32 +204,12 @@ function updatePreviewAnalysis(emptyMessage = DEFAULT_LOG_MESSAGE) {
 }
 
 function syncEditor(vdom) {
-  elements.editor.value = stringifyEditableVdom(vdom);
+  mountVdom(elements.testRoot, vdom);
 }
 
 function readEditorVdom() {
-  const rawValue = elements.editor.value.trim();
-
-  if (rawValue.length === 0) {
-    return {
-      ok: false,
-      message: "VDOM editor is empty.",
-    };
-  }
-
-  try {
-    const parsed = JSON.parse(rawValue);
-
-    return {
-      ok: true,
-      vdom: normalizeEditableVdom(parsed),
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      message: error instanceof Error ? error.message : "Invalid VDOM JSON.",
-    };
-  }
+  clearSurfaceAnnotations(elements.testRoot);
+  return domChildrenToVdom(elements.testRoot);
 }
 
 function renderEditorStatus() {
@@ -264,12 +217,8 @@ function renderEditorStatus() {
     return;
   }
 
-  const hasError = Boolean(state.editorError);
-
-  elements.editorStatus.textContent = hasError
-    ? `JSON error: ${state.editorError}`
-    : DEFAULT_EDITOR_HELP;
-  elements.editorStatus.classList.toggle("editor__status--error", hasError);
+  elements.editorStatus.textContent = DEFAULT_EDITOR_HELP;
+  elements.editorStatus.classList.remove("editor__status--error");
 }
 
 function renderPatchLog(emptyMessage = DEFAULT_LOG_MESSAGE) {
@@ -298,7 +247,7 @@ function renderToolbarMeta() {
   elements.diffModeStatus.textContent = `Mode ${DIFF_MODE_LABELS[state.diffMode]}`;
   elements.patchCount.textContent = `Shown Patches ${state.lastPatches.length}`;
   elements.patchStatus.textContent = state.statusMessage;
-  elements.patchButton.disabled = Boolean(state.editorError);
+  elements.patchButton.disabled = false;
   elements.undoButton.disabled = state.index === 0;
   elements.redoButton.disabled = state.index === total - 1;
 }

@@ -271,6 +271,21 @@ code {
   overflow: auto;
 }
 
+.canvas--editable {
+  cursor: text;
+  outline: none;
+}
+
+.canvas--editable:focus {
+  border-color: rgba(13, 118, 110, 0.46);
+  box-shadow: 0 0 0 4px rgba(13, 118, 110, 0.12);
+}
+
+.canvas--editable:empty::before {
+  content: "Edit the rendered preview here.";
+  color: rgba(107, 96, 79, 0.75);
+}
+
 .canvas__hint {
   margin: 0;
   color: var(--muted);
