@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ko">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -9,24 +9,37 @@
   <body>
     <main class="app-shell">
       <header class="hero">
-        <p class="hero__eyebrow">Vanilla JavaScript Project</p>
-        <h1>Virtual DOM / Diff / Patch Playground</h1>
+        <p class="hero__eyebrow">Vanilla JavaScript Demo</p>
+        <h1>Virtual DOM / Diff / Patch Visualizer</h1>
         <p class="hero__body">
-          실제 DOM을 Virtual DOM으로 변환하고, 이전 상태와 새 상태를 비교한 뒤 변경된
-          부분만 실제 DOM에 반영하는 흐름을 확인하는 과제용 데모입니다. 리스트 재정렬은
-          <code>key</code> 또는 <code>data-key</code> 속성을 기준으로 비교합니다.
+          Convert the live DOM into a Virtual DOM tree, compare previous and next VDOM,
+          and patch only the changed parts. Switch diff mode to compare keyed
+          reconciliation against index-based comparison.
         </p>
       </header>
 
       <section class="toolbar">
-        <div class="toolbar__actions">
-          <button id="patch-button" class="button button--primary" type="button">Patch</button>
-          <button id="undo-button" class="button" type="button">Undo</button>
-          <button id="redo-button" class="button" type="button">Redo</button>
+        <div class="toolbar__row">
+          <div class="toolbar__actions">
+            <button id="patch-button" class="button button--primary" type="button">Patch</button>
+            <button id="undo-button" class="button" type="button">Undo</button>
+            <button id="redo-button" class="button" type="button">Redo</button>
+          </div>
+
+          <div class="mode-switch" aria-label="Diff mode switch">
+            <span class="mode-switch__label">Diff Mode</span>
+            <div class="mode-switch__buttons">
+              <button class="mode-button is-active" data-diff-mode="auto" type="button">Auto (Keyed)</button>
+              <button class="mode-button" data-diff-mode="index" type="button">Index Only</button>
+            </div>
+          </div>
         </div>
+
         <div class="toolbar__meta">
           <span id="history-status" class="status-chip">History 1 / 1</span>
-          <span id="patch-status" class="status-text">초기 상태를 읽는 중입니다.</span>
+          <span id="diff-mode-status" class="status-chip status-chip--soft">Mode Auto (Keyed)</span>
+          <span id="patch-count" class="status-chip status-chip--soft">Shown Patches 0</span>
+          <span id="patch-status" class="status-text">Initial state is being prepared.</span>
         </div>
       </section>
 
@@ -34,28 +47,28 @@
         <article class="panel">
           <div class="panel__header">
             <div>
-              <p class="panel__eyebrow">A + C</p>
-              <h2>실제 영역</h2>
+              <p class="panel__eyebrow">Actual DOM</p>
+              <h2>Patch Target</h2>
             </div>
-            <p class="panel__description">Patch 결과가 반영되는 실제 DOM</p>
+            <p class="panel__description">Only the diff result is applied here.</p>
           </div>
 
           <div id="actual-root" class="canvas">
-            <section class="demo-card" data-version="v2">
+            <section class="demo-card" data-version="v3">
               <header class="demo-card__header">
                 <p class="badge">Week 4</p>
-                <h3>Keyed Virtual DOM Demo</h3>
+                <h3>Keyed List Demo</h3>
               </header>
 
               <p class="demo-card__body">
-                아래의 리스트와 카드들은 각각 <code>data-key</code> 속성을 가지고 있어서
-                순서를 바꿔도 identity를 유지한 채 diff 됩니다.
+                The list below uses <code>data-key</code>, so moving items can preserve
+                identity when Auto diff mode is enabled.
               </p>
 
               <ul class="feature-list">
                 <li data-key="dom">
                   <span class="feature-list__label">DOM</span>
-                  <strong>DOM to VDOM</strong>
+                  <strong>DOM to VDOM conversion</strong>
                 </li>
                 <li data-key="diff">
                   <span class="feature-list__label">DIFF</span>
@@ -70,22 +83,22 @@
               <div class="fact-grid">
                 <article class="fact-card" data-key="reflow">
                   <h4>Reflow</h4>
-                  <p>레이아웃을 다시 계산하는 비용</p>
+                  <p>Layout recalculation cost.</p>
                 </article>
                 <article class="fact-card" data-key="repaint">
                   <h4>Repaint</h4>
-                  <p>화면을 다시 그리는 비용</p>
+                  <p>Visual redraw cost.</p>
                 </article>
                 <article class="fact-card" data-key="history">
                   <h4>History</h4>
-                  <p>Undo / Redo로 이전 스냅샷 복원</p>
+                  <p>Undo and Redo restore snapshots.</p>
                 </article>
               </div>
 
-              <blockquote>
-                시연할 때는 <code>&lt;li data-key="..."&gt;</code> 순서를 바꿔서 keyed diff가
-                동작하는 모습을 먼저 보여주면 좋습니다.
-              </blockquote>
+              <p class="demo-card__note">
+                Try reordering the keyed list, changing a sentence, or inserting a new
+                paragraph below this note.
+              </p>
             </section>
           </div>
         </article>
@@ -93,10 +106,10 @@
         <article class="panel">
           <div class="panel__header">
             <div>
-              <p class="panel__eyebrow">B + D</p>
-              <h2>테스트 영역</h2>
+              <p class="panel__eyebrow">Test DOM</p>
+              <h2>Editable Preview</h2>
             </div>
-            <p class="panel__description">HTML을 수정하고 미리보기로 확인</p>
+            <p class="panel__description">Edit HTML freely and inspect the live diff.</p>
           </div>
 
           <label class="editor">
@@ -105,10 +118,14 @@
               id="test-editor"
               class="editor__input"
               spellcheck="false"
-              aria-label="테스트 영역 HTML 코드 편집기"
+              aria-label="Editable HTML source"
             ></textarea>
           </label>
 
+          <p class="canvas__hint">
+            Tip: reorder <code>li[data-key]</code> items, switch to <code>Index Only</code>,
+            then compare the patch log and VDOM tree.
+          </p>
           <div id="test-root" class="canvas canvas--preview"></div>
         </article>
       </section>
@@ -118,17 +135,17 @@
           <div class="panel__header">
             <div>
               <p class="panel__eyebrow">Guide</p>
-              <h2>시연 포인트</h2>
+              <h2>Demo Flow</h2>
             </div>
           </div>
 
           <ol class="guide-list">
-            <li>문장 하나만 바꿔서 TEXT patch를 보여줍니다.</li>
-            <li><code>data-version</code> 같은 속성을 바꿔서 PROPS patch를 보여줍니다.</li>
-            <li><code>feature-list</code> 내부 <code>li[data-key]</code> 순서를 바꿔 REORDER patch를 보여줍니다.</li>
-            <li>새 <code>li data-key="..."</code> 를 추가하거나 제거해 keyed 구성 변경과 REORDER를 시연합니다.</li>
-            <li>루트 섹션에 새 <code>&lt;p&gt;</code> 를 추가하거나 삭제해 일반 CREATE / REMOVE도 확인합니다.</li>
-            <li>마지막에 Undo / Redo로 state history가 함께 바뀌는지 확인합니다.</li>
+            <li>Change one sentence to show a simple TEXT patch.</li>
+            <li>Update <code>data-version</code> to show a PROPS patch.</li>
+            <li>Reorder the keyed list and compare Auto vs Index Only mode.</li>
+            <li>Add a new keyed list item and inspect the REORDER patch.</li>
+            <li>Add a new paragraph at the bottom to show plain CREATE / REMOVE.</li>
+            <li>Use Undo and Redo to prove that history restores both panels.</li>
           </ol>
         </article>
 
@@ -136,15 +153,41 @@
           <div class="panel__header">
             <div>
               <p class="panel__eyebrow">Inspector</p>
-              <h2>마지막 Patch 로그</h2>
+              <h2>Patch Log</h2>
             </div>
           </div>
 
           <ol id="patch-log" class="patch-log">
             <li class="patch-log__item patch-log__item--empty">
-              Patch를 실행하면 상세 변경 로그가 여기에 표시됩니다.
+              Edit the HTML to preview diff or click Patch to apply it.
             </li>
           </ol>
+        </article>
+      </section>
+
+      <section class="visualizer">
+        <article class="panel panel--compact">
+          <div class="panel__header">
+            <div>
+              <p class="panel__eyebrow">Tree View</p>
+              <h2>Actual VDOM</h2>
+            </div>
+            <p id="actual-vdom-summary" class="panel__description panel__description--compact"></p>
+          </div>
+
+          <pre id="actual-vdom-tree" class="tree-view"></pre>
+        </article>
+
+        <article class="panel panel--compact">
+          <div class="panel__header">
+            <div>
+              <p class="panel__eyebrow">Tree View</p>
+              <h2>Test VDOM</h2>
+            </div>
+            <p id="preview-vdom-summary" class="panel__description panel__description--compact"></p>
+          </div>
+
+          <pre id="preview-vdom-tree" class="tree-view"></pre>
         </article>
       </section>
     </main>

@@ -4,47 +4,57 @@ import { renderVdom } from "../vdom/renderVdom.js";
 
 export function applyPatches(rootElement, patches = []) {
   const orderedPatches = sortPatches(patches);
+  const changedNodes = [];
+
   orderedPatches.forEach((patch) => {
-    applyPatch(rootElement, patch);
+    const result = applyPatch(rootElement, patch);
+
+    if (Array.isArray(result)) {
+      changedNodes.push(...result);
+      return;
+    }
+
+    if (result) {
+      changedNodes.push(result);
+    }
   });
+
+  return normalizeHighlightTargets(changedNodes);
 }
 
 function applyPatch(rootElement, patch) {
   switch (patch.type) {
     case PATCH_TYPES.TEXT:
-      updateText(rootElement, patch);
-      break;
+      return updateText(rootElement, patch);
     case PATCH_TYPES.PROPS:
-      updateProps(rootElement, patch);
-      break;
+      return updateProps(rootElement, patch);
     case PATCH_TYPES.REPLACE:
-      replaceNode(rootElement, patch);
-      break;
+      return replaceNode(rootElement, patch);
     case PATCH_TYPES.REMOVE:
-      removeNode(rootElement, patch);
-      break;
+      return removeNode(rootElement, patch);
     case PATCH_TYPES.CREATE:
-      createNode(rootElement, patch);
-      break;
+      return createNode(rootElement, patch);
     case PATCH_TYPES.REORDER:
-      reorderChildren(rootElement, patch);
-      break;
+      return reorderChildren(rootElement, patch);
     default:
-      break;
+      return null;
   }
 }
 
 function updateText(rootElement, patch) {
   const target = getNodeByPath(rootElement, patch.path);
-  if (target) {
-    target.textContent = patch.value;
+  if (!target) {
+    return null;
   }
+
+  target.textContent = patch.value;
+  return target;
 }
 
 function updateProps(rootElement, patch) {
   const target = getNodeByPath(rootElement, patch.path);
   if (!target || target.nodeType !== Node.ELEMENT_NODE) {
-    return;
+    return null;
   }
 
   Object.entries(patch.props || {}).forEach(([name, value]) => {
@@ -55,22 +65,30 @@ function updateProps(rootElement, patch) {
 
     target.setAttribute(name, value);
   });
+
+  return target;
 }
 
 function replaceNode(rootElement, patch) {
   const target = getNodeByPath(rootElement, patch.path);
   if (!target || !target.parentNode) {
-    return;
+    return null;
   }
 
-  target.parentNode.replaceChild(renderVdom(patch.node), target);
+  const nextNode = renderVdom(patch.node);
+  target.parentNode.replaceChild(nextNode, target);
+  return nextNode;
 }
 
 function removeNode(rootElement, patch) {
   const target = getNodeByPath(rootElement, patch.path);
-  if (target && target.parentNode) {
-    target.parentNode.removeChild(target);
+  if (!target || !target.parentNode) {
+    return null;
   }
+
+  const highlightTarget = target.parentNode;
+  target.parentNode.removeChild(target);
+  return highlightTarget;
 }
 
 function createNode(rootElement, patch) {
@@ -79,18 +97,20 @@ function createNode(rootElement, patch) {
   const parent = getNodeByPath(rootElement, parentPath);
 
   if (!parent || typeof insertIndex !== "number") {
-    return;
+    return null;
   }
 
+  const nextNode = renderVdom(patch.node);
   const referenceNode = parent.childNodes[insertIndex] ?? null;
-  parent.insertBefore(renderVdom(patch.node), referenceNode);
+  parent.insertBefore(nextNode, referenceNode);
+  return nextNode;
 }
 
 function reorderChildren(rootElement, patch) {
   const parent = getNodeByPath(rootElement, patch.path);
 
   if (!parent) {
-    return;
+    return null;
   }
 
   const existingChildrenByKey = new Map();
@@ -113,6 +133,7 @@ function reorderChildren(rootElement, patch) {
   });
 
   parent.replaceChildren(...nextChildNodes);
+  return [parent, ...nextChildNodes];
 }
 
 function getNodeByPath(rootElement, path = []) {
@@ -131,6 +152,40 @@ function getNodeByPath(rootElement, path = []) {
 
 function findChildByKey(parentNode, key) {
   return Array.from(parentNode.childNodes).find((childNode) => getDomNodeKey(childNode) === String(key)) ?? null;
+}
+
+function normalizeHighlightTargets(nodes) {
+  const uniqueTargets = [];
+  const seenNodes = new Set();
+
+  nodes.forEach((node) => {
+    const target = toHighlightElement(node);
+
+    if (!target || !target.isConnected || seenNodes.has(target)) {
+      return;
+    }
+
+    seenNodes.add(target);
+    uniqueTargets.push(target);
+  });
+
+  return uniqueTargets;
+}
+
+function toHighlightElement(node) {
+  if (!node) {
+    return null;
+  }
+
+  if (node.nodeType === Node.ELEMENT_NODE) {
+    return node;
+  }
+
+  if (node.nodeType === Node.TEXT_NODE) {
+    return node.parentElement;
+  }
+
+  return null;
 }
 
 function sortPatches(patches) {
@@ -197,4 +252,4 @@ function compareSegment(left, right) {
   return left - right;
 }
 
-// TODO: focus 유지나 selection 복원까지 필요해지면 patch 단계에서 UI 상태 보존 로직을 추가합니다.
+// TODO: Preserve focus or selection state if the demo grows into richer editing.

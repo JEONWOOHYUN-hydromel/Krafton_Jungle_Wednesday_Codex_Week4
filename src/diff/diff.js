@@ -16,13 +16,23 @@ export const PATCH_TYPES = {
   REORDER: "REORDER",
 };
 
-export function diff(oldVNode, newVNode) {
+export const DIFF_MODES = {
+  AUTO: "auto",
+  INDEX: "index",
+};
+
+export function diff(oldVNode, newVNode, options = {}) {
   const patches = [];
-  walk(oldVNode, newVNode, [], patches);
+  const normalizedOptions = {
+    mode: DIFF_MODES.AUTO,
+    ...options,
+  };
+
+  walk(oldVNode, newVNode, [], patches, normalizedOptions);
   return patches;
 }
 
-function walk(oldVNode, newVNode, path, patches) {
+function walk(oldVNode, newVNode, path, patches, options) {
   if (!oldVNode && !newVNode) {
     return;
   }
@@ -94,23 +104,23 @@ function walk(oldVNode, newVNode, path, patches) {
     }
   }
 
-  diffChildren(oldVNode.children || [], newVNode.children || [], path, patches);
+  diffChildren(oldVNode.children || [], newVNode.children || [], path, patches, options);
 }
 
-function diffChildren(oldChildren, newChildren, parentPath, patches) {
-  if (shouldUseKeyedDiff(oldChildren, newChildren)) {
-    diffKeyedChildren(oldChildren, newChildren, parentPath, patches);
+function diffChildren(oldChildren, newChildren, parentPath, patches, options) {
+  if (options.mode !== DIFF_MODES.INDEX && shouldUseKeyedDiff(oldChildren, newChildren)) {
+    diffKeyedChildren(oldChildren, newChildren, parentPath, patches, options);
     return;
   }
 
   const maxLength = Math.max(oldChildren.length, newChildren.length);
 
   for (let index = 0; index < maxLength; index += 1) {
-    walk(oldChildren[index], newChildren[index], [...parentPath, index], patches);
+    walk(oldChildren[index], newChildren[index], [...parentPath, index], patches, options);
   }
 }
 
-function diffKeyedChildren(oldChildren, newChildren, parentPath, patches) {
+function diffKeyedChildren(oldChildren, newChildren, parentPath, patches, options) {
   const oldKeys = oldChildren.map(getVNodeKey);
   const newKeys = newChildren.map(getVNodeKey);
 
@@ -132,7 +142,7 @@ function diffKeyedChildren(oldChildren, newChildren, parentPath, patches) {
       return;
     }
 
-    walk(oldChild, newChild, [...parentPath, createKeySegment(key)], patches);
+    walk(oldChild, newChild, [...parentPath, createKeySegment(key)], patches, options);
   });
 }
 
@@ -175,4 +185,4 @@ function hasKeyOrderChanged(oldKeys, newKeys) {
   return oldKeys.some((key, index) => key !== newKeys[index]);
 }
 
-// TODO: 현재 keyed diff는 형제 전원이 key를 가질 때만 활성화됩니다. mixed children 전략은 추후 확장합니다.
+// TODO: Mixed keyed and unkeyed siblings still fall back to index diff.

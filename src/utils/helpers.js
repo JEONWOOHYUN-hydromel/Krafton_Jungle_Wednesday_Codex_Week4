@@ -72,10 +72,6 @@ export function getVNodeKey(vnode) {
   return vnode.key ?? getNormalizedKey(vnode.props);
 }
 
-export function hasVNodeKey(vnode) {
-  return getVNodeKey(vnode) !== null;
-}
-
 export function getDomNodeKey(node) {
   if (!node || node.nodeType !== Node.ELEMENT_NODE) {
     return null;
@@ -170,7 +166,7 @@ export function formatPath(path = []) {
 
 export function summarizePatches(patches = []) {
   if (patches.length === 0) {
-    return "변경점이 없습니다.";
+    return "No changes";
   }
 
   const counts = patches.reduce((summary, patch) => {
@@ -188,20 +184,113 @@ export function describePatch(patch) {
 
   switch (patch.type) {
     case "TEXT":
-      return `${location}: 텍스트를 "${patch.value}" 로 변경`;
+      return `${location}: update text to "${truncateText(patch.value, 48)}"`;
     case "PROPS":
-      return `${location}: 속성 변경 ${Object.keys(patch.props || {}).join(", ")}`;
+      return `${location}: update props ${Object.keys(patch.props || {}).join(", ")}`;
     case "REPLACE":
-      return `${location}: 노드를 ${patch.node?.tagName || patch.node?.type || "새 노드"}로 교체`;
+      return `${location}: replace node with ${patch.node?.tagName || patch.node?.type || "node"}`;
     case "REMOVE":
-      return `${location}: 노드 제거`;
+      return `${location}: remove node`;
     case "CREATE":
-      return `${location}: 새 노드 추가`;
+      return `${location}: create node`;
     case "REORDER":
-      return `${location}: keyed 자식 순서/구성 재정렬`;
+      return `${location}: reorder keyed children`;
     default:
       return `${location}: ${patch.type}`;
   }
 }
 
-// TODO: component 단위 추상화나 scheduler 실험이 필요해지면 공통 유틸을 이 파일에 추가합니다.
+export function getVdomStats(vnode) {
+  const stats = {
+    nodes: 0,
+    elements: 0,
+    texts: 0,
+    maxDepth: 0,
+  };
+
+  visitVdom(vnode, 0, (node, depth) => {
+    stats.nodes += 1;
+    stats.maxDepth = Math.max(stats.maxDepth, depth);
+
+    if (node.type === TEXT_NODE) {
+      stats.texts += 1;
+      return;
+    }
+
+    if (node.type !== ROOT_NODE) {
+      stats.elements += 1;
+    }
+  });
+
+  return stats;
+}
+
+export function vdomToTreeString(vnode) {
+  const lines = [];
+
+  walkTree(vnode, 0, lines);
+  return lines.join("\n");
+}
+
+function walkTree(vnode, depth, lines) {
+  const indent = "  ".repeat(depth);
+
+  if (!vnode) {
+    lines.push(`${indent}- null`);
+    return;
+  }
+
+  if (vnode.type === ROOT_NODE) {
+    lines.push("ROOT");
+    vnode.children.forEach((child) => {
+      walkTree(child, depth + 1, lines);
+    });
+    return;
+  }
+
+  if (vnode.type === TEXT_NODE) {
+    lines.push(`${indent}- "${truncateText(normalizeText(vnode.value), 56)}"`);
+    return;
+  }
+
+  const attrs = Object.entries(vnode.props || {})
+    .map(([name, value]) => `${name}="${truncateText(String(value), 24)}"`)
+    .join(" ");
+
+  lines.push(`${indent}- <${vnode.tagName}${attrs ? ` ${attrs}` : ""}>`);
+
+  if ((vnode.children || []).length === 0) {
+    lines.push(`${indent}  - (empty)`);
+    return;
+  }
+
+  vnode.children.forEach((child) => {
+    walkTree(child, depth + 1, lines);
+  });
+}
+
+function visitVdom(vnode, depth, visitor) {
+  if (!vnode) {
+    return;
+  }
+
+  visitor(vnode, depth);
+
+  (vnode.children || []).forEach((child) => {
+    visitVdom(child, depth + 1, visitor);
+  });
+}
+
+function normalizeText(value = "") {
+  return String(value).replace(/\s+/g, " ").trim();
+}
+
+function truncateText(value = "", maxLength = 32) {
+  if (value.length <= maxLength) {
+    return value;
+  }
+
+  return `${value.slice(0, maxLength - 3)}...`;
+}
+
+// TODO: If component-level scheduling is added later, keep shared formatter helpers here.
